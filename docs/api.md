@@ -708,16 +708,19 @@ reinvestment = rt.DividendReinvestment(
   debt first, using unearmarked cash before proportionately reducing pending
   dividend budgets. Only the remainder buys shares. Neither borrows for DRIP or
   spends unrelated cash. Interest on reserved cash is not reinvested.
-- **Costs:** budget includes configured commission, half-spread and impact:
-  `notional = budget/(1 + total_cost_rate)`. Each paid action has its own fill and
-  linked actual cost rows. Existing proportional models apply; broker DRIP fee
-  schedules, discounts, tax withholding and measured fill prices are not modeled.
+- **Costs:** automatic dividend purchases have zero commission, half-spread and
+  impact: `notional = budget`, `quantity = budget / raw_close`. Each paid action
+  retains its trade and audit row with `trade_cost=0`; no cost rows or fee events
+  are posted for that trade. Entry and scheduled rebalancing keep their configured
+  costs, including when a scheduled basket uses released dividend cash. This is
+  the user's modeling convention, not a claim about every broker's DRIP fees.
+  Discounts, tax withholding and measured fill prices are not modeled.
 - **Collisions:** `rebalance_only` releases the pending budget into account cash
   before the sweep and scheduled basket. No extra DRIP trade runs on that close.
   `hold_cash` preserves the final mark-only session; cash may still repay debt.
   These are currently the only supported collision/terminal policies.
 - **Risk:** check maintenance/nonpositive equity before purchases and again after
-  costs/marks; stopped runs retain actual coverage. DRIP never restores target
+  execution/marks; stopped runs retain actual coverage. DRIP never restores target
   weights/leverage or enforces a target concentration limit between scheduled dates.
   Old holdings earn the move into the fill; new shares earn only later moves and
   later ex-date entitlements. Analytical `returns(..., dividend_policy="reinvest_ex_close")`
@@ -734,7 +737,7 @@ while the policy is enabled (not per announced or unpaid action):
 | `paid_amount` | Float64; total entitled cash received |
 | `debt_repaid` | Float64; earmarked principal consumed by the ordinary sweep before disposition |
 | `cash_released` | Float64; earmark released to normal account funding, potentially used for debt or a scheduled basket |
-| `signed_notional`, `trade_cost` | Float64; actual DRIP purchase and associated cost, zero without a fill |
+| `signed_notional`, `trade_cost` | Float64; actual DRIP purchase (zero without a fill) and cost (always zero) |
 | `trade_id` | String, nullable; join to `trades` and `costs` |
 | `status` | String: `reinvested`, `debt_repaid`, `scheduled_rebalance`, `terminal_cash`, or `stopped_before_trade` |
 
@@ -753,6 +756,8 @@ allocation and attribution plots consume these results without rerunning simulat
 
 Metadata stores the full policy under `dividend_reinvestment`, plus payment
 availability, standing payer instruction, budget, margin and turnover conventions.
+`reinvestment_cost_policy="zero_commission_spread_impact"` explicitly records the
+zero-cost assumption independently of the ordinary `cost_rates`.
 No new runtime dependencies or network access are required. See
 [the runnable example](../examples/dividend_reinvestment.py).
 

@@ -123,8 +123,8 @@ python examples/dividend_reinvestment.py
 
 The script writes daily/payment audits, a comparison CSV and two PNG figures under
 ignored `artifacts/dividend_reinvestment/`. The standing instruction buys the paying
-stock at the first supplied close on/after payment, with costs inside the dividend
-budget. Payments are assumed available before the close. It does not model broker
+stock at the first supplied close on/after payment, using the full available
+dividend budget with no trading costs. Entry/rebalancing costs still apply. Payments are assumed available before the close. It does not model broker
 DRIP discounts, exact fills, withholding or per-asset enrollment. The final session
 remains mark-only. This example does not change the existing acceptance notebooks'
 cash-held dividend assumptions or their interpretation.

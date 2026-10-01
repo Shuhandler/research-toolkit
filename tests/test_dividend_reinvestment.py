@@ -48,26 +48,30 @@ def reinvestment_trades(result):
     return result.trades.filter(pl.col("execution") == "dividend_reinvestment_close")
 
 
-def test_pay_date_costs_and_future_pnl(inputs, run):
+def test_cost_free_reinvestment_preserves_entry_costs_and_future_pnl(inputs, run):
     dates = [date(2024, 1, d) for d in (2, 3, 4, 5)]
     market = rt.prepare_market_data(**inputs(series={"A": [100., 100., 100., 110.]}, dates=dates,
         dividends=[("div", "A", dates[1], dates[2], 10.)]))
     result = run(market, initial_capital=101., dividend_reinvestment=drip(),
         costs=rt.TradeCosts(commission_bps=50., half_spread_bps=30., impact_bps=20.))
     # $101 buys one $100 share with a $1 fee. The $10 payment buys
-    # 10/101 shares at $100, inclusive of a 1% fee. No ex-date purchase.
-    assert result.positions["quantity"].to_list() == pytest.approx([1., 1., 111/101, 111/101])
-    assert result.daily["pnl"].to_list() == pytest.approx([9., -10/101, 1110/101])
-    assert result.daily["equity"][-1] == pytest.approx(12210/101)
+    # .1 shares at $100 with no DRIP fee. No ex-date purchase.
+    assert result.positions["quantity"].to_list() == pytest.approx([1., 1., 1.1, 1.1])
+    assert result.daily["pnl"].to_list() == pytest.approx([9., 0., 11.])
+    assert result.daily["equity"][-1] == pytest.approx(121.)
     trade = reinvestment_trades(result).row(0, named=True)
     assert trade["session"] == dates[2]
-    assert trade["signed_notional"] == pytest.approx(1000/101)
-    assert trade["trade_cost"] == pytest.approx(10/101)
+    assert trade["signed_notional"] == 10.
+    assert trade["trade_cost"] == 0.
+    assert result.costs.filter(pl.col("trade_id") == trade["trade_id"]).is_empty()
+    assert result.costs["amount"].sum() == pytest.approx(1.)
+    assert result.costs["date"].unique().to_list() == [dates[0]]
+    assert result.metadata["reinvestment_cost_policy"] == "zero_commission_spread_impact"
     audit = result.dividend_reinvestments.row(0, named=True)
     assert audit["trade_id"] == trade["trade_id"] and audit["paid_amount"] == 10.
     assert result.events.filter(pl.col("trade_id") == trade["trade_id"])["action_id"].unique().to_list() == ["div"]
     assert result.turnover["phase"].to_list() == ["entry", "dividend_reinvestment"]
-    assert result.turnover["turnover"][-1] == pytest.approx((1000/101)/110)
+    assert result.turnover["turnover"][-1] == pytest.approx(10/110)
     assert "pre_reinvestment" in report(result).equity["phase"].to_list()
     reconcile(result)
 
@@ -140,15 +144,31 @@ def test_reserved_weekend_cash_interest_is_not_reinvested(inputs, run, policy):
     reconcile(result)
 
 
-def scheduled_run(market, dates, baskets, *, funding="after_debt_repayment"):
+def scheduled_run(market, dates, baskets, *, funding="after_debt_repayment", costs=None, capital=100.):
     targets = pl.DataFrame([(dates[i-1], dates[i], a, float(w), 1.)
         for i, weights in baskets for a, w in weights.items()], schema=TARGET_SCHEMA, orient="row")
-    return rt.scheduled_rebalance(market, targets=targets, initial_capital=100.,
+    return rt.scheduled_rebalance(market, targets=targets, initial_capital=capital,
         entry_session=dates[1], end_session=dates[-1],
         policy=rt.RebalancePolicy(execution="scheduled_close", sizing="post_cost_equity", fractional_shares=True,
             terminal_action="mark_only", non_session="raise", receivable_policy="reserve", max_asset_weight=1.),
-        costs=rt.TradeCosts(commission_bps=0., half_spread_bps=0., impact_bps=0.), financing=finance(),
+        costs=costs or rt.TradeCosts(commission_bps=0., half_spread_bps=0., impact_bps=0.), financing=finance(),
         dividend_reinvestment=drip(funding))
+
+
+def test_cost_free_drip_followed_by_costed_rebalance(inputs):
+    dates = [date(2024, 1, d) for d in (2, 3, 4, 5, 8)]
+    market = rt.prepare_market_data(**inputs(series={"A": [100.]*5, "B": [100.]*5}, dates=dates,
+        dividends=[("div", "A", dates[2], dates[2], 10.)]))
+    result = scheduled_run(market, dates, [(1, {"A": 1., "B": 0.}), (3, {"A": 0., "B": 1.})],
+        capital=101., costs=rt.TradeCosts(commission_bps=100., half_spread_bps=0., impact_bps=0.))
+    # $1 entry fee leaves one A; free $10 DRIP adds .1 A. Selling $110 costs
+    # $1.10, then $108.90 funds the B purchase inclusive of its 1% fee.
+    assert result.trades["signed_notional"].to_list() == pytest.approx([100., 10., -110., 108.9/1.01])
+    assert result.trades["trade_cost"].to_list() == pytest.approx([1., 0., 1.1, 1.089/1.01])
+    assert result.daily["equity"][-1] == pytest.approx(108.9/1.01)
+    drip_id = reinvestment_trades(result)["trade_id"][0]
+    assert result.costs.filter(pl.col("trade_id") == drip_id).is_empty()
+    reconcile(result)
 
 
 @pytest.mark.parametrize("funding", ["after_debt_repayment", "before_debt_repayment"])

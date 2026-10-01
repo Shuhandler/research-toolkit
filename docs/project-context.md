@@ -26,7 +26,8 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Implement milestone 1D, including reports, plots and offline acceptance notebook | Prior user request |
 | Implement milestone 2 | Prior user request |
 | Implement realistic automatic dividend reinvestment after payment | Prior user request |
-| Implement historical daily SOFR financing (interpreting “SOFT” as SOFR) | Latest user request |
+| Implement historical daily SOFR financing (interpreting “SOFT” as SOFR) | Prior user request |
+| Exclude commission, spread and impact from automatic dividend reinvestment; preserve normal trading costs | Latest user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -142,7 +143,9 @@ API, not additional user confirmations:
 
 - A standing same-asset instruction executes at the first supplied close on or
   after payment, assuming payment is available before that close. No ex-date credit
-  funds purchases. Fractional quantities and actual modeled trade costs apply.
+  funds purchases. Fractional quantities apply. The subsequent user decision
+  exempts these purchases from commission, spread and impact; ordinary trades
+  continue to use configured costs.
 - Choose `before_debt_repayment` to reserve paid principal (existing debt continues
   accruing), or `after_debt_repayment` to reinvest residual dividend cash. No extra
   loan is taken for reinvestment. Interest on held cash is not added to its budget.
@@ -152,7 +155,8 @@ API, not additional user confirmations:
   sold that asset; it can reopen a position. Per-asset enrollment/cancellation and
   broker-specific payment timestamps/fills remain future features.
 - Per-payment records link cash receipt, earmarked debt repayment, released cash,
-  purchases, fees and status. Pre/post-trade margin checks and all reconciliations
+  purchases, zero DRIP fees and status. The zero-cost assumption is recorded in
+  result metadata. Pre/post-trade margin checks and all reconciliations
   apply. Analytical `reinvest_ex_close` returns remain a separate convention.
 
 ## Historical SOFR extension — implemented

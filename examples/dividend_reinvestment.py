@@ -1,7 +1,8 @@
 """Offline comparison of cash/debt treatment and payment-funded reinvestment.
 
 Uses self-authored synthetic weekday data, not historical market observations or
-an exchange calendar. Rates, closing fills and proportional costs are assumptions.
+an exchange calendar. Rates, closing fills and entry costs are assumptions.
+Automatic dividend purchases have zero commission, spread and impact.
 """
 from pathlib import Path
 

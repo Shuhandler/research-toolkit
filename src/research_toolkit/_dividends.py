@@ -9,7 +9,8 @@ class DividendReinvestment:
 
     Payment dates have no intraday timestamp: execution assumes cash is available
     before the first supplied close on or after payment. This models a standing
-    instruction, not a broker's actual DRIP fill. All choices are explicit.
+    instruction, not a broker's actual DRIP fill. Reinvestment assumes zero
+    commission, spread and impact; entry/rebalancing keep their configured costs.
     """
 
     execution: str

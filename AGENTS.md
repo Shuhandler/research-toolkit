@@ -69,7 +69,10 @@
   ACT/365F, separate cash/loan rates, and the daily accrual audit. The current SOFR
   model uses rates known at New York midnight and daily capitalization; do not
   describe it as the official SOFR Index or a broker's exact loan contract.
-- Charge transaction costs on actual trades. Reconcile positions, trades, cash,
+- Automatic dividend reinvestment has zero commission, spread and impact by user
+  decision. Preserve its zero-cost trade/audit records; normal entry and scheduled
+  rebalancing retain configured costs, including when funded by released dividends.
+- Charge transaction costs on applicable actual trades. Reconcile positions, trades, cash,
   receivables, debt, costs, P&L, and equity. State the equity denominator used for
   returns, including entry costs and any external flows.
 - Preserve stopped-run status and actual coverage in all downstream consumers.

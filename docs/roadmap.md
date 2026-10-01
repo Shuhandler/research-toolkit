@@ -146,7 +146,8 @@ provenance obligations. None is required to plot or backtest a basic portfolio.
 
 Payment-funded automatic dividend reinvestment now works in both simulators.
 Explicit policies select debt priority, first-close timing, scheduled-basket
-priority and terminal cash treatment. Fractional purchases use actual trade costs;
+priority and terminal cash treatment. Per user decision, automatic fractional
+dividend purchases exclude trading costs; ordinary entry/rebalancing remain costed;
 per-payment audits and pre/post-trade margin checks reconcile through the existing
 ledger. Broker-specific DRIP fills/timestamps, tax withholding, per-asset enrollment
 and fixed/minimum fee models remain outside this extension. Milestone 3 is still

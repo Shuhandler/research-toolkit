@@ -379,12 +379,15 @@ daily execution assumption; data contain no intraday payment timestamp and no
 broker DRIP execution price. Missing required prices still raise. A non-session
 payment earns no fabricated stock return before the next actual session.
 
-For available dividend budget `B` and the paying asset's total proportional cost
-rate `k`, purchase `N=B/(1+k)` of stock and `N/P_close` shares; charge `k*N`.
-No external cash or new debt tops up this budget. Commission, spread and impact
-are separate expenses using the same configured rates as other trades. Multiple
-paid actions receive separate linked fills; current costs are proportional, so
-splitting these fills adds no fixed-fee artifact. Fixed/minimum fees remain unsupported.
+For available dividend budget `B`, purchase `B` of stock and `B/P_close` shares.
+Automatic dividend purchases have zero commission, spread and impact, as requested
+by the user. No external cash or new debt tops up this budget. Each paid action
+retains a linked fill with `trade_cost=0`, and generates no fee events/cost rows.
+The exchange of cash for shares at the raw mark is equity-neutral. Ordinary entry
+and scheduled rebalancing retain their configured costs, even when a scheduled
+basket uses released dividend cash. The zero-DRIP-cost assumption is recorded in
+metadata as `reinvestment_cost_policy="zero_commission_spread_impact"`; it is a
+research convention, not a universal statement about broker fees.
 
 With `after_debt_repayment`, unearmarked cash repays debt first and any required
 remainder reduces pending dividend budgets pro rata. With `before_debt_repayment`,
@@ -406,8 +409,8 @@ retarget portfolio weights or enforce a target concentration limit between
 scheduled baskets. This behavior, timing, funding and cost assumptions are saved
 in run metadata. Disable reinvestment to retain the original quantity path.
 
-Old holdings earn the price move into the execution close. Reinvestment costs
-reduce that day's P&L; new shares first earn subsequent price moves and subsequent
+Old holdings earn the price move into the execution close. The cost-free purchase
+creates no immediate P&L; new shares first earn subsequent price moves and subsequent
 ex-date dividends. Pre-reinvestment equity is included in drawdowns. A pre-trade
 margin/insolvency failure prevents purchases; post-trade failures stop at the same
 close without liquidation. Stops freeze account balances; any blocked paid budget
@@ -415,6 +418,7 @@ is released in the audit record without additional post-stop debt transactions.
 
 For every paid action the audit must reconcile:
 `paid_amount = debt_repaid + cash_released + signed_notional + trade_cost`.
+`trade_cost` is retained for schema consistency and is always zero for DRIP.
 `cash_released` is cash returned to unrestricted account funding, not a promise
 that it remains in closing cash. These audit allocations are not extra ledger
 cash movements. Events, positions, all costs, P&L and equity still reconcile.

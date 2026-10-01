@@ -450,20 +450,18 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
 
     def reinvest(day, equity):
         nonlocal cash
-        notionals, expenses = [], []
+        notionals = []
         for action_id, budget in reinvestment_budgets.items():
             row = reinvestment_rows[action_id]
             asset = row["asset"]
-            k = math.fsum(rates[c][asset] for c in rates)
-            notional = budget/(1+k)
+            # User-selected DRIP convention: no commission, spread or impact.
+            # Ordinary entry and scheduled trades retain their configured costs.
+            notional = budget
             delta = notional/prices[day, asset]
             updated_quantity = quantity[asset]+delta
             if (not all(math.isfinite(v) and v > 0 for v in (notional, delta, updated_quantity))
                     or updated_quantity <= quantity[asset]):
                 raise ValueError("dividend reinvestment quantity is not representable")
-            components = {c: notional*rates[c][asset] for c in rates}
-            cost = math.fsum(components.values())
-            _check(notional+cost, budget, max(capital, equity), "reinvestment_budget")
             trade_id = f"T{len(records['trades']):06d}"
             quantity[asset] = updated_quantity
             cash -= budget
@@ -471,27 +469,17 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                   trade_id=trade_id, dq=delta, dc=-notional)
             records["trades"].append({"trade_id": trade_id, "session": day, "time": closes[day],
                 "asset": asset, "signed_quantity": delta, "reference_price": prices[day, asset],
-                "signed_notional": notional, "execution": "dividend_reinvestment_close", "trade_cost": cost})
-            for component, amount in components.items():
-                if not amount:
-                    continue
-                records["costs"].append({"cost_id": f"C{len(records['costs']):06d}", "date": day,
-                    "time": closes[day], "trade_id": trade_id, "asset": asset,
-                    "component": component, "amount": amount, "basis": "modeled"})
-                event(day, component, phase="reinvestment_close", asset=asset, action_id=action_id,
-                      trade_id=trade_id, dc=-amount)
-                pending_pnl[component, asset].append(-amount)
-            row.update(session=day, signed_notional=notional, trade_cost=cost,
+                "signed_notional": notional, "execution": "dividend_reinvestment_close", "trade_cost": 0.})
+            row.update(session=day, signed_notional=notional, trade_cost=0.,
                        trade_id=trade_id, status="reinvested")
             notionals.append(notional)
-            expenses.append(cost)
         if cash < 0:
             _check(cash, 0., max(capital, equity), "reinvestment_cash_roundoff")
             cash = 0.
         outstanding = math.fsum(item["outstanding"] for item in receivables.values())
         after = math.fsum([*(quantity[a]*prices[day, a] for a in assets), cash, outstanding, -debt])
-        residual, tolerance = _check(after, equity-math.fsum(expenses), max(capital, equity), "reinvestment_cost_equity")
-        records["diagnostics"].append({"session": day, "code": "reinvestment_cost_equity",
+        residual, tolerance = _check(after, equity, max(capital, equity), "reinvestment_equity_neutrality")
+        records["diagnostics"].append({"session": day, "code": "reinvestment_equity_neutrality",
                                        "residual": residual, "tolerance": tolerance})
         traded = math.fsum(notionals)
         records["turnover"].append({"session": day, "phase": "dividend_reinvestment",
@@ -678,7 +666,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             dividend_policy="ex_date_receivable_pay_date_cash_explicit_reinvestment",
             reinvestment_payment_availability="before_close_on_pay_date_assumed",
             reinvestment_asset_policy="paying_asset_even_if_previously_sold",
-            reinvestment_budget="paid_dividend_principal_net_of_assigned_debt_repayment_including_trade_costs",
+            reinvestment_budget="paid_dividend_principal_net_of_assigned_debt_repayment",
+            reinvestment_cost_policy="zero_commission_spread_impact",
             margin_monitoring="before_scheduled_or_reinvestment_trade_and_after_session_close",
             turnover_denominator="pre_trade_equity_entry_separately_labeled")
     return BacktestResult(**{name: pl.DataFrame(rows, schema=SCHEMAS[name])

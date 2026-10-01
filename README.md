@@ -98,7 +98,8 @@ dividend_reinvestment = rt.DividendReinvestment(
 ```
 
 This reserves the actual paid dividend to buy fractional shares of the paying
-stock, including trade costs within that budget. Choose `"after_debt_repayment"`
+stock with no commission, spread or impact deducted. Entry and scheduled trades
+retain their configured costs. Choose `"after_debt_repayment"`
 to repay debt first and reinvest only the remaining dividend cash. Neither option
 borrows to fund the purchase. Omitting the policy preserves existing behavior.
 
