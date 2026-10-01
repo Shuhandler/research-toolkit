@@ -23,7 +23,8 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Setup phase creates documentation and minimal scaffolding only; no financial functions | Initial request |
 | Implement milestones 1A and 1B; continue to defer 1C/1D | Follow-up user request after setup |
 | Implement milestone 1C | Subsequent user request |
-| Implement milestone 1D, including reports, plots and offline acceptance notebook | Latest user request |
+| Implement milestone 1D, including reports, plots and offline acceptance notebook | Prior user request |
+| Implement milestone 2 | Latest user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -73,7 +74,7 @@ These are explicit, revisable design choices, not additional user confirmations:
 
 ## Status and next step
 
-Milestones 1A–1D are implemented: strict metadata/calendar/price/action
+Milestones 1A–1D and 2 are implemented: strict metadata/calendar/price/action
 validation, deterministic input identities, simple/log and cumulative returns,
 equal/custom weights, and a fractional-share ledger with entry costs, splits,
 dividend receivables/payments, cash interest, borrowing, financing charges,
@@ -101,6 +102,28 @@ stop reasons stay visible. Snapshot persistence uses Polars Parquet plus a versi
 JSON manifest; the source data identity is distinct from file hashes. These are
 engineering refinements of the accepted design. See [the API](api.md).
 
-Next is milestone 2: pre-decision inverse-volatility allocation and scheduled
-rebalancing, preserving all existing trade, cost and financing reconciliations.
-Real-data research can also begin after choosing permitted sources and assumptions.
+Milestone 2 adds inverse-volatility weights, target concentration rejection,
+scheduled baskets through the same ledger, turnover, exposures, covariance risk
+contributions, and rolling risk. The example uses the existing synthetic snapshot
+for actual monthly trades versus buy-and-hold; both runs complete and reconcile.
+No additional dependency, reference code, provider access or publication was needed.
+
+Engineering decisions made within M2 (not additional user confirmations):
+- Allocation/risk windows end strictly before their declared decision session;
+  scheduled close executions follow the decision. All dates must be supplied
+  sessions; there is no inferred holiday roll. The terminal session is mark-only.
+- Concentration is a scalar maximum risky proportion at each target. Breaches
+  raise without clipping; later drift does not itself cause trades.
+- Required receivable policy: `reserve` explicitly caps unlevered risky spending
+  when equity includes unpaid dividends; `require_target` rejects an unlevered
+  basket requiring debt. Leveraged baskets use declared financing. Pre-trade
+  breaches stop before a schedule can conceal them.
+- Add explicit analytical ex-date-reinvested raw total returns for allocation;
+  executable positions retain actual receivable/payment accounting.
+- Turnover counts gross buys plus sells over pre-trade equity, with entry separate.
+  Fixed/per-share/minimum fees and nonlinear impact remain cost-model extensions;
+  they are not approximated by this proportional-cost sizing solver.
+
+Next is milestone 3: dated signals and chronological research boundaries, retaining
+these timing and accounting contracts. Real-data research can also begin after
+choosing permitted sources and assumptions.

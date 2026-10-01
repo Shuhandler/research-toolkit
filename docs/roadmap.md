@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Milestones 1A–1D are implemented and tested. The offline synthetic acceptance
+Milestones 1A–1D and 2 are implemented and tested. The offline synthetic acceptance
 notebook passes the complete financed, corporate-action-aware workflow. This is a
 research release; real-data selection/licensing remains a separate user decision.
 See [the API](api.md) and [examples](../examples/README.md).
@@ -99,19 +99,27 @@ No successful full-period report can conceal a stopped run.
 8. Notebook narrative is written after inspecting actual tables and plots. The
    README/API documentation describe only implemented behavior as runnable.
 
-## Milestone 2 — allocation and scheduled rebalancing
+## Milestone 2 — allocation and scheduled rebalancing — implemented
 
-Add inverse-volatility weights from pre-decision trailing windows, concentration
-limits, scheduled target weights, turnover, exposures, covariance risk contributions,
-and rolling-risk/allocation views. Generate real trades from quantity changes and
-keep all financing/action accounting from M1. Add fixed/per-share/minimum fees or
-capacity-sensitive impact only alongside the corresponding sizing tests.
+Implemented pre-decision inverse-volatility allocation with concentration rejection,
+explicit dated target baskets through the shared financed ledger, gross turnover,
+exposure/allocation views, covariance risk contributions and rolling net-return
+risk. The [offline notebook](../examples/scheduled_rebalancing.ipynb) and
+[Python workflow](../examples/scheduled_rebalancing.py) compare actual monthly trades
+with unchanged initial holdings. No new required dependencies.
+
+Cost-model extension rule: fixed/per-share/minimum fees and capacity-sensitive
+impact remain unsupported; add them only alongside corresponding sizing tests.
+M2 uses the existing configurable proportional commission/spread/impact models
+on actual changed quantities, including sales.
 
 **Acceptance:** no trade/cost when quantities do not change; drift differs from
 target weights; schedule/holiday policy is explicit; cash/cost funding reconciles;
 inverse-volatility inputs exclude future observations; allocation limits cannot
 silently alter user weights. Estimated risk contributions and realized attribution
-remain distinct.
+remain distinct. These checks pass, including initial-only equality with
+buy-and-hold, future-observation perturbation, independent event reconstruction,
+pre-trade margin stops, and unpaid-dividend reserve/rejection behavior.
 
 ## Milestone 3 — signals and chronological research
 

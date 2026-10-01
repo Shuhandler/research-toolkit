@@ -4,9 +4,10 @@ A notebook-friendly Python library for quantitative trading research: prepare
 market data, construct portfolios, simulate trades, measure performance, and plot
 results through a small, consistent interface.
 
-**Status: milestone 1 complete (1A–1D).** Strict Polars inputs, a financed
+**Status: milestones 1 (1A–1D) and 2 implemented.** Strict Polars inputs, a financed
 buy-and-hold ledger, performance and benchmark tables, optional Matplotlib plots,
-and replayable snapshots are implemented. The [acceptance notebook](examples/buy_and_hold_equities.ipynb)
+replayable snapshots, inverse-volatility allocation, and scheduled rebalancing
+are implemented. The [acceptance notebook](examples/buy_and_hold_equities.ipynb)
 runs offline on clearly labeled synthetic data. See the [implemented API](docs/api.md).
 
 ## Purpose and scope
@@ -20,12 +21,14 @@ backtesting must never require a model framework.
 The current library supports daily, single-currency equity buy-and-hold portfolios:
 raw prices, explicit splits and cash dividends, equal or custom initial weights,
 entry costs, cash holdings, initial leverage, calendar-day financing, and dividend
-cash repayment of debt. Saved inputs run entirely offline. There is no automatic rebalancing or terminal
-sale. This is a research simulator, not a broker execution system.
+cash repayment of debt. Saved inputs run entirely offline. Buy-and-hold never
+rebalances; scheduled strategies trade only on the supplied dates. Neither performs
+an implicit terminal sale. This is a research simulator, not a broker execution system.
 
-Later work covers inverse-volatility allocation, scheduled rebalancing, signals,
-short positions, richer trading costs, intraday inputs, and chronological research
-workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
+Scheduled portfolios use dated targets, explicit funding policies, concentration
+checks and actual quantity-changing trades. Risk contributions, rolling risk,
+turnover and exposure views are available. Later work covers signals, short
+positions, richer trading costs, intraday inputs and chronological research workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
 
 ## Usage
 
@@ -71,6 +74,13 @@ explicit, and plots label their actual coverage and stop reason. Save validated
 inputs with `rt.save_snapshot(market, new_directory)` and replay using
 `rt.load_snapshot(directory)`; loading verifies file hashes and input identity.
 
+The [Milestone 2 notebook](examples/scheduled_rebalancing.ipynb) demonstrates monthly
+inverse-volatility targets, concentration checks, 1.25× financing, actual trade
+costs, turnover, allocation drift and risk diagnostics. Its [short Python workflow](examples/scheduled_rebalancing.py)
+shows how to assemble calls without notebook-specific library logic. Allocation
+estimates exclude the decision session and all future returns; execution occurs
+later. Unpaid dividend funding is an explicit policy. See [the exact API](docs/api.md#scheduled-allocation-and-rebalancing--milestone-2).
+
 ## Local development
 
 Python 3.12+ is the target. From this checkout:
@@ -83,6 +93,7 @@ python -m pytest -q
 python examples/unlevered_buy_and_hold.py
 python examples/financed_buy_and_hold.py
 python examples/run_acceptance.py
+python examples/run_acceptance.py --milestone 2
 ```
 
 Run the notebook kernel from that environment. The commands install the local
@@ -96,7 +107,8 @@ minimum Polars 1.30.0 and Matplotlib 3.9.0. The current environment uses Matplot
 3.11.2. Both execute the acceptance notebook. Exact replay dependencies are in
 [examples/requirements-acceptance.txt](examples/requirements-acceptance.txt).
 `run_acceptance.py` writes the executed notebook, PNG figures, daily CSV and
-environment/revision provenance under ignored `artifacts/acceptance/`.
+environment/revision provenance under ignored `artifacts/acceptance/` or
+`artifacts/milestone2/`. No new dependencies were added for milestone 2.
 
 ## Repository guide
 

@@ -9,12 +9,15 @@ from ._data import DIAGNOSTIC_SCHEMA, _validated_market
 from ._results import ReturnResult
 
 
-def returns(market, *, method: str, basis: str) -> ReturnResult:
+def returns(market, *, method: str, basis: str, dividend_policy: str | None = None) -> ReturnResult:
     """Compute simple or log returns from a validated, complete price panel.
 
     ``basis='price'`` accepts raw or split-adjusted prices. Raw returns retain split
-    jumps; this is recorded in diagnostics. ``basis='total_return'`` requires a
-    supplied total-return-adjusted series. Use the ledger for cash-held dividends.
+    jumps; this is recorded in diagnostics. ``basis='total_return'`` accepts a
+    supplied total-return-adjusted series, or raw inputs with the explicit
+    dividend_policy='reinvest_ex_close' analytical convention. That convention
+    reinvests ex-date entitlement before actual payment; it is not executable cash
+    accounting. Use the ledger for dividends held as receivables/cash.
     The first observation per asset remains null, never a synthetic zero return.
     """
     market = _validated_market(market)
@@ -22,9 +25,20 @@ def returns(market, *, method: str, basis: str) -> ReturnResult:
         raise ValueError("method must be 'simple' or 'log'")
     allowed = {"price": {"raw", "split_adjusted"},
                "total_return": {"total_return_adjusted"}}
-    if basis not in allowed or market.metadata["price_basis"] not in allowed[basis]:
+    action_returns = basis == "total_return" and market.metadata["price_basis"] == "raw"
+    if action_returns:
+        if dividend_policy != "reinvest_ex_close":
+            raise ValueError("incompatible raw total returns: require dividend_policy='reinvest_ex_close'")
+    elif dividend_policy is not None:
+        raise ValueError("dividend_policy is only supported for raw total returns")
+    if not action_returns and (basis not in allowed or market.metadata["price_basis"] not in allowed[basis]):
         raise ValueError("basis is incompatible with the supplied price_basis")
     column = f"{method}_return"
+    ratios = {(r["effective_session"], r["asset"]): r["ratio"] for r in market.splits.iter_rows(named=True)}
+    dividends = {}
+    for r in market.dividends.iter_rows(named=True):
+        key = (r["ex_session"], r["asset"])
+        dividends[key] = dividends.get(key, 0.) + r["cash_per_share"]
     rows = []
     previous = {}
     for row in market.prices.iter_rows(named=True):
@@ -32,11 +46,12 @@ def returns(market, *, method: str, basis: str) -> ReturnResult:
         prior = previous.get(asset)
         value = None
         if prior is not None:
-            change = (price - prior[1]) / prior[1]
+            comparable = (price+dividends.get((session, asset), 0.))*ratios.get((session, asset), 1.) if action_returns else price
+            change = (comparable - prior[1]) / prior[1]
             # log1p preserves small changes; log differences handle extreme ratios.
             value = (change if method == "simple" else
                      math.log1p(change) if math.isfinite(change) and change > -1
-                     else math.log(price) - math.log(prior[1]))
+                     else math.log(comparable) - math.log(prior[1]))
             if not math.isfinite(value) or (method == "simple" and value <= -1):
                 raise ValueError(f"return outside representable positive wealth at {session}/{asset}")
         rows.append({"session": session, "asset": asset,
@@ -44,7 +59,7 @@ def returns(market, *, method: str, basis: str) -> ReturnResult:
         previous[asset] = (session, price)
     diagnostics = [{"code": "structural_leading_null", "table": "returns",
                     "count": len(previous)}]
-    if market.metadata["price_basis"] == "raw" and market.splits.height:
+    if not action_returns and market.metadata["price_basis"] == "raw" and market.splits.height:
         diagnostics.append({"code": "raw_price_split_discontinuity", "table": "returns",
                             "count": market.splits.height})
     return ReturnResult(
@@ -53,6 +68,7 @@ def returns(market, *, method: str, basis: str) -> ReturnResult:
         metadata={"method": method, "basis": basis, "frequency": "1d", "unit": "fraction"
                   if method == "simple" else "log_fraction", "snapshot_id": market.snapshot_id,
                   "source": deepcopy(market.metadata),
+                  "dividend_policy": dividend_policy,
                   "sessions": [d.isoformat() for d in market.sessions["session"]],
                   "assets": sorted(previous)},
         diagnostics=pl.DataFrame(diagnostics, schema=DIAGNOSTIC_SCHEMA),

@@ -52,3 +52,15 @@ def test_partial_plot_label(inputs, policy, run, plt):
     assert "STOPPED" in ax.get_title() and result.stop_reason in ax.get_title()
     assert result.stop_session.isoformat() in ax.get_title()
     assert min(ax.lines[0].get_ydata()) < 0
+
+
+def test_rolling_turnover_and_exposure_plots(market, run, plt):
+    backtest = run(market)
+    rolling = rt.rolling_risk(backtest, window=2, periods_per_year=4, risk_free_annual_effective=0.)
+    fig, ax = rt.plots.rolling_risk(rolling)
+    assert ax.lines[0].get_ydata().tolist() == rolling.values["annualized_volatility"].to_list()
+    fig, ax = rt.plots.turnover(backtest)
+    assert len(ax.collections[0].get_offsets()) == 1
+    report = rt.performance(backtest, **KW)
+    fig, ax = rt.plots.exposures(report)
+    assert ax.lines[0].get_ydata().tolist() == report.daily["gross_exposure"].to_list()

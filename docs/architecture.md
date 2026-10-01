@@ -1,6 +1,6 @@
 # Architecture and extension proposal
 
-Milestones 1A–1D implement data, returns, allocation, costs, financing, the ledger,
+Milestones 1A–1D and 2 implement data, returns, allocation, costs, financing, the ledger,
 performance, local snapshots, and optional plotting. [The implemented API](api.md) is authoritative for
 current signatures and schemas. This document also retains later design targets;
 the full financed/performance/plotting acceptance notebook is implemented. Add each
@@ -17,11 +17,12 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_portfolio.py` | Equal/custom weights, exposure and drift calculations | 1B |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_financing.py` | Explicit cash/loan rates, day count, sweep and margin configuration | 1C |
-| `_backtest.py` | Ordered events, quantities, cash, receivables, debt, reconciliation | 1B–1C |
+| `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
 | `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
-| `_metrics.py` | Performance tables, benchmark comparisons, rolling calculations | 1D onward |
+| `_metrics.py` | Performance tables, benchmark comparisons, result validation | 1D |
 | `plots.py` | Public plotting namespace consuming prepared numerical results | 1D onward |
-| `_allocation.py` | Inverse-volatility and later constrained allocations | 2 |
+| `_allocation.py` | Pre-decision inverse-volatility/covariance estimates and realized rolling risk | 2 |
+| `_rebalancing.py` | Explicit dated-target policy, validation and post-cost basket sizing | 2 |
 | `_research.py` | Lagged features and chronological splits without ML requirements | 3 |
 | `data_sources/` | Optional acquisition adapters producing the standard contracts | When needed |
 | `models/` | Optional model comparisons; never a dependency of simulation | 4 |
@@ -127,7 +128,8 @@ Implemented `PerformanceResult` contains `summary` (`metric`, `value`, `unit`,
 `n_obs`, `status`), `benchmark_comparison`, `benchmark_series`, `drawdowns`, and metadata for frequency,
 annualization, sample window, risk-free convention, and return basis. Undefined
 metrics are null with a reason code. Invalid inputs raise; they do not become null
-metrics. `CorrelationResult` uses the same null/status convention; rolling risk remains later work.
+metrics. `CorrelationResult`, `RiskResult` and `RollingRiskResult` use the same
+null/status convention; `AllocationResult` returns weights plus their estimates.
 Status codes are diagnostics, not strategy recommendations.
 
 Results carry `complete` or `stopped` status and stop reason/session/time. The
@@ -215,14 +217,15 @@ decimal units, gross/net status, and return basis. No fetching or recomputing
 metrics in plotting; direct display normalization must be explicit.
 
 Implemented views: price, returns, dollar P&L, equity, drawdown, distribution,
-correlation, allocation, and attribution. Rolling risk remains planned. Add a view
+correlation, allocation, attribution, rolling risk, turnover, exposures and
+estimated risk contributions. Add a view
 only after its underlying numerical result exists. Interactive backends can be optional later.
 
-Future rebalancing consumes dated target weights and creates **quantity changes**
+Implemented scheduled rebalancing consumes dated target weights and creates **quantity changes**
 through the same ledger; scheduled and signal policies do not replace accounting.
 Inverse-volatility weights use only a stated trailing window ending before the
 decision; insufficient/zero volatility is an explicit error or named policy.
-Concentration limits apply to declared equity or gross-exposure denominators;
+The implemented concentration limit applies to risky gross-notional proportions;
 violations cannot silently renormalize targets. Risk contributions use a declared
 covariance window and denominator, with zero-risk handling.
 
@@ -236,3 +239,23 @@ later consumers of these contracts, not prerequisites for the first release.
 Packaging follows the [PyPA package tutorial](https://packaging.python.org/en/latest/tutorials/packaging-projects/).
 The distinction between distribution and import names follows
 [PyPA's terminology](https://packaging.python.org/en/latest/discussions/distribution-package-vs-import-package/).
+
+## Milestone 2 concrete boundaries
+
+`scheduled_rebalance` validates `RebalancePolicy` and dated target tables, then uses
+`_simulate`, the same engine as `buy_and_hold`. `_rebalancing._basket` solves a
+proportional-cost funded target; it never posts ledger events. The engine alone
+posts fills, financing/actions, reconciliations and stop status. Added result tables
+are `targets`, `rebalances`, and `turnover`; scheduled pre-trade valuations are
+preserved for drawdown reporting. Full-period consumers retain completion guards.
+
+`_allocation` consumes validated return panels for strictly pre-decision estimates;
+its rolling-risk function instead consumes validated realized portfolio records for
+reporting. These information cutoffs are distinct and explicit. Raw analytical
+reinvested returns require a named ex-date convention, separate from simulation's
+receivable/payment model. All plots consume the prepared containers.
+
+[The API](api.md#scheduled-allocation-and-rebalancing--milestone-2) records exact
+schemas, funding/receivable choices, concentration and cost solver limits, units,
+turnover denominators and null reasons. Fixed/nonlinear cost models, signal
+execution, shorts and broker-specific margin rules are still future extensions.

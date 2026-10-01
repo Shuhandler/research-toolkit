@@ -78,3 +78,32 @@ libm rounding during generation can vary across platforms. Never replace these
 fixtures with credentials, private data, or licensed data without reviewing its
 redistribution terms. Real-data research requires its own supplied calendar,
 source/action coverage and clearly identified benchmark convention.
+
+## Milestone 2: scheduled allocation
+
+[scheduled_rebalancing.ipynb](scheduled_rebalancing.ipynb) and
+[scheduled_rebalancing.py](scheduled_rebalancing.py) use the same committed synthetic
+snapshot. The default starts with $10 million after a warm-up, uses 40 pre-decision
+returns, materializes first-supplied-session monthly targets, caps each risky
+proportion at 40%, and requests 1.25× post-cost exposure. Target dates are explicit;
+non-session dates raise. The January 1 synthetic-calendar target is deliberately
+not presented as a real-exchange execution date.
+
+The shared ledger produces actual purchases/sales, component costs, debt changes,
+turnover and attribution; no return-series multiplication or daily target-weight
+multiplication substitutes for accounting. The script compares a scheduled run to
+buy-and-hold from the identical initial basket. Plots show allocations, turnover,
+exposures, equity, rolling risk and estimated covariance risk contributions.
+
+```sh
+python examples/scheduled_rebalancing.py
+python examples/run_acceptance.py --milestone 2
+```
+
+The latter writes an executed notebook with six embedded figures under ignored
+`artifacts/milestone2/`, alongside numerical CSVs and environment/revision provenance.
+The notebook's configuration exposes window, warm-up, annualization, leverage,
+concentration limit and capital; the short example workflow holds explicit fee,
+funding and margin settings. Its Markdown observations were written after inspecting
+the default tables and figures. Inputs are synthetic; no provider, license choice or
+new dependency is needed to run it offline after installation.

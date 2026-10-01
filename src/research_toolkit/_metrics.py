@@ -79,13 +79,17 @@ def _validated_run(result, allow_partial):
     _table(vals, {"session": pl.Date, "phase": pl.String, "equity": pl.Float64},
            "valuations", ["session", "phase"], nonempty=True)
     expected_keys = [(daily["period_start"][0], "pre_entry"), (daily["period_start"][0], "post_entry")]
-    expected_keys += [(d, "close") for d in daily["session"]]
+    scheduled = set(result.targets["session"].to_list()) if result.metadata.get("strategy") == "scheduled_rebalance" else set()
+    for d in daily["session"]:
+        if d in scheduled:
+            expected_keys.append((d, "pre_rebalance"))
+        expected_keys.append((d, "close"))
     if vals.select("session", "phase").rows() != expected_keys:
         raise ValueError("valuations must include ordered pre/post-entry and every daily close")
     if not math.isclose(vals["equity"][0], capital) or vals["equity"][1] <= 0:
         raise ValueError("invalid entry valuations")
     if any(not math.isclose(a, b, rel_tol=1e-10, abs_tol=1e-8)
-           for a, b in zip(vals["equity"].to_list()[2:], daily["equity"])):
+           for a, b in zip(vals.filter(pl.col("phase") == "close")["equity"], daily["equity"])):
         raise ValueError("valuations disagree with daily equity")
     return daily, vals, deepcopy(meta)
 
@@ -179,7 +183,7 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
     # Prepare chart tables once. Position weights include leverage; cash, debt and
     # receivables complete the balance sheet. No hidden normalization in plots.
     allocation = result.positions.select("session", (pl.lit("asset:")+pl.col("asset")).alias("component"), "weight")
-    balances = result.valuations.filter(pl.col("phase") != "pre_entry")
+    balances = result.valuations.filter(pl.col("phase").is_in(["post_entry", "close"]))
     for col in ("cash", "debt", "dividend_receivable"):
         allocation = pl.concat([allocation, balances.select("session", pl.lit(f"account:{col}").alias("component"),
             pl.when(pl.col("equity") > 0).then(pl.col(col)/pl.col("equity")*(-1 if col == "debt" else 1))
@@ -192,7 +196,9 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
                 ddof=1, sortino_denominator="all_observations", alignment=alignment,
                 annualization="sqrt_periods_per_year_no_serial_correlation_adjustment",
                 n_obs=n, benchmark=bm_meta, allow_partial=allow_partial,
-                drawdown_basis="pre_entry_post_entry_and_session_closes")
+                drawdown_basis=("pre_entry_post_entry_pre_rebalance_and_session_closes"
+                    if meta.get("strategy") == "scheduled_rebalance" else
+                    "pre_entry_post_entry_and_session_closes"))
     return PerformanceResult(summary, comparison, benchmark_series, daily.clone(), vals.clone(),
                              drawdowns, allocation.sort("session", "component"), attribution, meta)
 

@@ -6,7 +6,7 @@
   Preserve user changes; never reset or overwrite unrelated work. Read
   `docs/project-context.md`, `docs/architecture.md`, and
   `docs/financial-conventions.md` before financial implementation.
-- Milestones 1A–1D are implemented; read `docs/api.md` for supported behavior.
+- Milestones 1A–1D and 2 are implemented; read `docs/api.md` for supported behavior.
   Do not implement later functions merely because a proposed signature appears in
   a document. Follow the current user request. Do not create placeholder functions
   or empty class hierarchies for future phases.
@@ -52,6 +52,13 @@
 - Use only information available before the specified decision/execution time.
   Buy-and-hold means fixed quantities apart from corporate actions; drifting
   weights and leverage must not trigger implicit trades.
+- Keep buy-and-hold and scheduled strategies on the shared accounting engine.
+  Scheduled decisions must precede execution; trailing allocation/risk inputs end
+  strictly before the decision session. Missing/non-session execution dates raise.
+  Preserve explicit reserve-versus-require-target receivable funding and pre-trade
+  margin checks. Do not silently turn a target concentration limit into a rule that
+  trades whenever actual weights drift. Analytical ex-date-reinvested returns are
+  distinct from the executable receivable/cash ledger.
 - Charge transaction costs on actual trades. Reconcile positions, trades, cash,
   receivables, debt, costs, P&L, and equity. State the equity denominator used for
   returns, including entry costs and any external flows.

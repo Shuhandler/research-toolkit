@@ -1,14 +1,16 @@
-# Implemented API: milestones 1A–1D
+# Implemented API: milestones 1A–1D and 2
 
 Use `import research_toolkit as rt`. Core functions are `prepare_market_data`,
 `returns`, `cumulative_returns`, `equal_weights`, `buy_and_hold`, `performance`,
-`correlation`, `save_snapshot`, and `load_snapshot`, with optional `rt.plots` views.
+`correlation`, `save_snapshot`, `load_snapshot`, `inverse_volatility_weights`,
+`scheduled_rebalance`, `risk_contributions`, and `rolling_risk`, with optional
+`rt.plots` views.
 Result/configuration objects are concrete dataclasses; their tables are Polars
 DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Short positions, scheduled trading, inverse-volatility allocation, rolling risk,
-provider adapters, and chronological model research remain unimplemented. Future
+Short positions, signal-driven trading, richer cost models, provider adapters, and
+chronological model research remain unimplemented. Future
 extensions in [architecture](architecture.md) are labeled separately.
 
 ## Validate market data
@@ -88,11 +90,12 @@ wealth = rt.cumulative_returns(price_returns, method="wealth")
 
 `returns` accepts validated `MarketData`, rather than a bare price table, so it
 can check the calendar and adjustment basis. `method` is `simple` or `log`.
-`basis="price"` accepts raw/split-adjusted inputs; `basis="total_return"` requires
-a declared total-return-adjusted series. Raw price returns retain split jumps and
-produce a `raw_price_split_discontinuity` diagnostic when splits are present.
-They do not calculate corporate-action-aware asset total returns; use the ledger
-or a correctly documented adjusted input for those economics.
+`basis="price"` accepts raw/split-adjusted inputs; `basis="total_return"` accepts
+a declared total-return-adjusted series or raw inputs with the explicit
+`dividend_policy="reinvest_ex_close"` analytical convention described in M2 below.
+Raw `basis="price"` retains split jumps and produces a
+`raw_price_split_discontinuity` diagnostic when splits are present. Cash-held
+portfolio returns still come from the ledger, not the analytical reinvested series.
 
 `ReturnResult.values` has `session`, `asset`, `period_start`, and `simple_return`
 or `log_return`. The first return and period start for each asset remain null.
@@ -453,4 +456,224 @@ Every function returns `(Figure, Axes)`, supports an existing axis, and never ca
 `show()`, changes global styles, fetches inputs or reruns the simulator/metrics.
 Portfolio plots label actual coverage and stopped status/reason. Percentage axes
 format stored fractions without changing data. Cash/loan attribution remains
-separate from asset price P&L. Rolling risk and interactive backends remain later work.
+separate from asset price P&L. Milestone 2 adds rolling risk below; interactive
+backends remain later work.
+
+## Scheduled allocation and rebalancing — milestone 2
+
+### Historical allocation inputs
+
+Inverse-volatility and covariance estimates consume an explicit `ReturnResult`
+with simple returns. Existing price-return and supplied adjusted-index calls
+remain supported. Raw equity inputs also support this **explicit analytical**
+corporate-action convention:
+
+```python
+asset_returns = rt.returns(
+    market, method="simple", basis="total_return",
+    dividend_policy="reinvest_ex_close",
+)
+allocation = rt.inverse_volatility_weights(
+    asset_returns, decision_session=decision_session, lookback=40,
+    periods_per_year=252, max_asset_weight=0.40,
+)
+allocation.weights  # asset: String, weight: Float64; risky proportions sum to 1.
+```
+
+For raw total returns, the holding interval's gross multiplier is
+`split_ratio * (close + ex_date_cash_dividend_per_post_split_share) / prior_close`.
+It assumes the ex-date entitlement is reinvested at that close; actual payment
+liquidity is **not** modeled by this analytical series. Multiple ordinary dividends
+on the same ex-date are summed. Entry on an ex-date earns no prior entitlement.
+The ledger still uses receivables and actual payment dates, so its cash-held returns
+can differ. Supplying an adjusted index with `dividend_policy` raises to prevent
+counting actions twice. Log and cumulative transformations retain the chosen policy.
+Raw `basis="price"` continues to retain split jumps; choose that basis deliberately,
+not as a substitute for action-aware allocation inputs.
+
+`inverse_volatility_weights` requires an integer `lookback >= 2`, positive explicit
+annualization, and a decision session in the supplied return calendar. It uses the
+last `lookback` nonstructural intervals whose **ending session is strictly earlier
+than the decision session**. It never uses the decision day's close or a later
+observation. Insufficient history, missing inputs, non-simple returns, or zero
+asset sample volatility raise. Weights are proportional to `1 / sample_volatility`;
+normalization uses only those estimates. No risk-free subtraction occurs.
+
+`max_asset_weight` is a finite scalar in `(0, 1]`, measured against gross risky
+notional. Breaches **raise**, with no clipping, optimization or silent redistribution.
+A relative 1e-12 tolerance handles equality roundoff. The returned `AllocationResult`
+contains `weights`, `estimates` (`asset`, `annualized_volatility`, `n_obs`), and metadata
+with source/basis, snapshot identity, sample interval endpoints, decision date,
+lookback, annualization, `ddof=1`, concentration limit and denominator. It is not a
+model-parameter vector or a portfolio equity-weight table.
+
+### Dated targets and execution
+
+```python
+# Construct one complete basket per execution session from chosen weights.
+# This is table construction, not a call that chooses dates implicitly.
+targets = allocation.weights.with_columns(
+    pl.lit(decision_session).alias("decision_session"),
+    pl.lit(execution_session).alias("session"),
+    pl.lit(1.0).alias("gross_leverage"),
+).select("decision_session", "session", "asset", "weight", "gross_leverage")
+
+result = rt.scheduled_rebalance(
+    market, targets=targets, initial_capital=starting_equity,
+    entry_session=execution_session, end_session=final_session,
+    policy=rt.RebalancePolicy(
+        execution="scheduled_close", sizing="post_cost_equity",
+        fractional_shares=True, terminal_action="mark_only", non_session="raise",
+        receivable_policy="reserve", max_asset_weight=0.40,
+    ),
+    costs=costs, financing=financing,
+)
+```
+
+Targets have the exact schema `decision_session: Date`, `session: Date`,
+`asset: String`, `weight: Float64`, `gross_leverage: Float64`. The first basket
+executes on `entry_session`. Later execution dates lie strictly before `end_session`
+so the terminal session remains mark-only. Every decision/execution date must be
+in the supplied calendar, with `decision_session < session`; missing/non-session
+dates raise. The engine does not infer monthly dates, shift holidays, or carry a
+missing target forward into a new trade. The example explicitly materializes the
+first supplied session of each month; other schedules can supply their own dates.
+
+Every basket must cover the same asset universe, use explicit zeros for exits,
+have nonnegative weights summing to one (1e-12 tolerance, with only that roundoff
+normalized by the recorded basket-sum convention), and declare one leverage and decision
+session. A later entrant must already have an explicit zero entry weight and full
+price history in the market snapshot. Leverage is finite/nonnegative and can change
+at scheduled targets. All-cash targets use leverage zero and retain a valid risky
+allocation template. Concentration limits apply to **requested risky proportions**,
+not subsequent weight drift; equity weights may exceed those limits when leveraged.
+User-supplied targets assert their own information provenance; dated columns cannot
+prove arbitrary weights were chosen without future information. Use the trailing
+allocation helper and retain its metadata for generated targets.
+
+`Financing` is required, including explicit zero rates. Every leveraged target
+needs a valid maintenance threshold and must be initially compatible with it.
+The shared ledger preserves corporate-action order, financing on calendar dates,
+receivable entitlement from pre-ex holdings, actual dividend payments, debt sweeps,
+and complete trade/cost/P&L reconciliation. Holdings before the close earn that
+interval's price move; the scheduled close changes future holdings and books its
+own transaction costs in the current interval. The first interval still includes
+entry costs relative to original capital. Buy-and-hold behavior is preserved.
+
+### Funding, limits and turnover
+
+At a scheduled mark, let `E` be pre-trade equity, `R` unpaid receivables, `v_i` the
+current marked holdings, `w_i` risky proportions, `L` target leverage, and `k_i`
+the sum of proportional commission, half-spread and impact rates. Solve
+`E_after + sum(k_i * abs(w_i * N(E_after) - v_i)) = E`.
+
+- `receivable_policy="reserve"`: for `L <= 1`,
+  `N(x) = max(0, min(L*x, x-R))`. This explicitly reserves unavailable receivables
+  instead of funding purchases with an unstated loan. Actual gross leverage can
+  be below the request; the shortfall is recorded. For `L > 1`, `N(x)=L*x` and
+  borrowing is explicit under the supplied financing policy.
+- `receivable_policy="require_target"`: `N(x)=L*x`. A basket with `L <= 1` that
+  would leave debt raises; the caller can choose reserve, leave cash, or explicitly
+  request leverage. Leveraged targets still use supplied financing.
+
+Existing debt can remain when a reserve-policy liquidation leaves only unpaid
+receivables securing the loan; reserve never increases debt for an unlevered target.
+Later payments repay that debt. Receivables remain part of net equity and margin
+accounting even though they are not spendable cash.
+
+The proportional-cost solver requires each asset's total rate `< 1` and
+`L * sum(w_i*k_i) < 1`; unsupported extreme rates or insolvent cost funding raise.
+Bisection solves the monotone post-cost equation; resulting cash, quantities,
+post-trade equity and attribution are independently reconciled. Required borrowing
+is funded explicitly, sales execute before buys, and remaining cash repays excess
+debt. Costs apply to **absolute changed notional**, not the whole target portfolio.
+Relative notional differences no larger than 1e-13 are treated as representational
+roundoff; this is recorded, not a user-facing minimum-trade threshold. No quantities
+changed means no trades and no fees. Fixed/per-share/minimum fees and nonlinear
+capacity models remain unsupported and need their own sizing tests before addition.
+
+Before a scheduled trade, nonpositive equity or a maintenance breach stops the run
+**before any rebalance can conceal it**. Otherwise the completed close is checked
+again after costs. Failure status and all actual records are preserved. Targets
+remain the requested plan, including any future unexecuted rows in a stopped run.
+No forced liquidation, automatic breach-triggered rebalance or position clipping
+is added. Full-period reports still require complete status.
+
+### Added result records
+
+Every `BacktestResult` now also contains typed tables:
+
+| Table | Fields |
+| --- | --- |
+| `targets` | The validated, sorted requested target schema above; empty for buy-and-hold |
+| `rebalances` | `session`, `decision_session`, `equity_before`, `equity_after`, `target_gross_leverage`, `actual_gross_leverage`, `trade_cost`, `gross_traded_notional`, `receivable_reserved` |
+| `turnover` | `session`, `phase` (`entry`/`rebalance`), `gross_traded_notional`, `equity_before`, `turnover` |
+
+Dates are `Date`, labels `String`, numerics `Float64`. `receivable_reserved` is the
+**dollar reduction in requested risky notional** caused by reserve sizing, not an
+additional expense or a second receivable balance. Entry is included only in
+`turnover`; `rebalances` records subsequent processed baskets, including zero-trade
+ones. Turnover is gross buys **plus** gross sells divided by equity just before the
+basket; it is not half-turnover and excludes financing/split events. No-trade
+holding sessions are omitted; scheduled zero-trade baskets explicitly report zero.
+
+Scheduled sessions add a `pre_rebalance` valuation before the usual `close`.
+Performance drawdown/equity includes these marks, so a price peak just before a
+fee is visible. Closing positions/allocation exclude those intermediate marks.
+`execution="scheduled_close"` identifies later fills; their events use
+`phase="rebalance_close"`. Entry keeps its existing records and semantics.
+Metadata records the full policy, concentration denominator, decision/execution
+separation, turnover denominator, margin-monitoring order and roundoff threshold.
+
+### Estimated risk and realized rolling risk
+
+```python
+risk = rt.risk_contributions(
+    asset_returns, weights=allocation.weights, gross_leverage=1.0,
+    decision_session=decision_session, lookback=40, periods_per_year=252,
+)
+rolling = rt.rolling_risk(
+    result, window=40, periods_per_year=252, risk_free_annual_effective=0.03,
+    allow_partial=False,
+)
+```
+
+`risk_contributions` uses the same strictly pre-decision common sample as allocation.
+Weights must cover all return assets, including zeros. Risky proportions are scaled
+by explicit leverage into net-equity exposures `u`; cash/financing are assumed
+deterministic for this estimate. Annualized covariance is sample covariance times
+`periods_per_year`, using `ddof=1`. Portfolio volatility is `sqrt(u' Sigma u)`;
+marginal contribution is `(Sigma u)_i / volatility`; component contribution is
+`u_i * marginal`. Components reconcile to estimated volatility and may be negative
+when an asset offsets others. This is not realized dollar attribution or a complete
+model of stochastic financing/margin risk.
+
+`RiskResult.values` has `asset`, `equity_weight`, `marginal_volatility`,
+`volatility_contribution`, `fraction_of_total`, `n_obs`, `status`.
+`covariance` has `asset`, `other_asset`, `annualized_covariance`. Metadata records
+window/basis/source, explicit leverage, annualization and `portfolio_volatility`.
+Zero portfolio volatility returns null contributions with
+`zero_portfolio_volatility`; insufficient history raises. Contributions use
+fraction/sqrt(year), covariance fraction-squared/year; fractions of total are ratios.
+
+`rolling_risk` uses realized net portfolio returns **through each closing session**
+for reporting, not for a same-close trading decision. `window >= 2` is an integer;
+a full window is required. Early rows stay null with `insufficient_samples` and
+the actual count. `RollingRiskResult.values` has `session`, `period_start` (the
+window's first interval start), `n_obs`, `annualized_volatility`, `sharpe`,
+`volatility_status`, `sharpe_status`. Flat windows have zero volatility and null
+Sharpe with `zero_volatility`. Effective annual risk-free conversion, sample std,
+and annualization match `performance`. Metadata retains status/actual coverage;
+stopped runs require `allow_partial=True`.
+
+### Additional prepared-data plots
+
+`rt.plots.rolling_risk(rolling, metric="annualized_volatility", ax=None)` also
+accepts `metric="sharpe"`. `rt.plots.risk_contributions(risk, ax=None)` labels
+estimated volatility contributions separately from `plots.attribution` dollars.
+`rt.plots.turnover(result, allow_partial=False, ax=None)` separates entry from later
+baskets; stopped results need explicit opt-in. `rt.plots.exposures(report, ax=None)`
+shows risky exposure, cash, debt and receivables. Existing `plots.allocation(report)`
+shows scheduled changes and intervening drift. All return `(Figure, Axes)`, preserve
+null gaps, and consume prepared numerical tables without rerunning allocation or
+simulation. See [the runnable example](../examples/scheduled_rebalancing.py).

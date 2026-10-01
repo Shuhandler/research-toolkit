@@ -143,3 +143,65 @@ def correlation(result, *, ax=None):
                  f"n={result.values['n_obs'][0]}", fontsize=10)
     ax.figure.colorbar(artist, ax=ax, label="Pearson correlation")
     return ax.figure, ax
+
+
+def rolling_risk(result, *, metric="annualized_volatility", ax=None):
+    """Prepared trailing volatility or Sharpe, including undefined warm-up gaps."""
+    from ._results import RollingRiskResult
+    if not isinstance(result, RollingRiskResult):
+        raise ValueError("expected RollingRiskResult from rolling_risk()")
+    if metric not in {"annualized_volatility", "sharpe"}:
+        raise ValueError("metric must be annualized_volatility or sharpe")
+    _, ax = _axes(ax)
+    ax.plot(result.values["session"].to_list(), result.values[metric].to_list())
+    m = result.metadata
+    status = f" | STOPPED: {m['stop_reason']} (partial)" if m["status"] != "complete" else ""
+    label = "Annualized volatility" if metric == "annualized_volatility" else "Sharpe"
+    return _finish(ax, f"{m['window']}-period trailing {label.lower()} | "
+        f"{m['entry_session']} to {m['actual_end_session']}{status}",
+        "Volatility / sqrt(year)" if metric == "annualized_volatility" else "Ratio",
+        percent=metric == "annualized_volatility")
+
+
+def risk_contributions(result, *, ax=None):
+    """Estimated covariance contributions, distinct from realized dollar P&L."""
+    from ._results import RiskResult
+    if not isinstance(result, RiskResult):
+        raise ValueError("expected RiskResult from risk_contributions()")
+    _, ax = _axes(ax)
+    values = [float("nan") if v is None else v for v in result.values["volatility_contribution"]]
+    ax.bar(result.values["asset"].to_list(), values)
+    m = result.metadata
+    status = " | undefined: zero portfolio volatility" if m["portfolio_volatility"] == 0 else ""
+    return _finish(ax, f"Estimated volatility contributions | {m['sample_start']} to {m['sample_end']}"
+        f" | n={m['n_obs']}{status}", "Contribution / sqrt(year)", percent=True, dates=False)
+
+
+def turnover(result, *, allow_partial=False, ax=None):
+    """Prepared gross traded notional/pre-trade equity; entry separately labeled."""
+    from ._results import BacktestResult
+    if not isinstance(result, BacktestResult) or type(allow_partial) is not bool:
+        raise ValueError("expected BacktestResult and boolean allow_partial")
+    if not allow_partial:
+        result.require_complete()
+    _, ax = _axes(ax)
+    for phase in ("entry", "rebalance"):
+        rows = result.turnover.filter(pl.col("phase") == phase)
+        if rows.height:
+            ax.scatter(rows["session"].to_list(), rows["turnover"].to_list(), label=phase.capitalize())
+    ax.legend(fontsize="small")
+    m = result.metadata
+    status = f" | STOPPED: {m['stop_reason']} (partial)" if result.status != "complete" else ""
+    return _finish(ax, f"Gross turnover (both buys and sells) | {m['entry_session']} to "
+                   f"{m['actual_end_session']}{status}", "Traded notional / pre-trade equity", percent=True)
+
+
+def exposures(report, *, ax=None):
+    """Prepared dollar exposure, cash, debt and receivables from the closing ledger."""
+    context = _context(report)
+    _, ax = _axes(ax)
+    for col, label in (("gross_exposure", "Gross = net risky exposure (long only)"),
+                       ("cash", "Cash"), ("debt", "Debt"), ("dividend_receivable", "Dividend receivables")):
+        ax.plot(report.daily["session"].to_list(), report.daily[col].to_list(), label=label)
+    ax.legend(fontsize="small")
+    return _finish(ax, f"Closing exposures and funding | {context}", report.metadata["currency"])

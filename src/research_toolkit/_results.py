@@ -35,7 +35,7 @@ class ReturnResult:
 
 @dataclass(frozen=True)
 class BacktestResult:
-    """Buy-and-hold records, including the failure close for a stopped run.
+    """Daily portfolio records, including the failure close for a stopped run.
 
     All monetary fields use metadata currency. Call ``require_complete()`` before
     presenting results as covering the entire requested period.
@@ -50,6 +50,9 @@ class BacktestResult:
     attribution: pl.DataFrame
     receivables: pl.DataFrame
     diagnostics: pl.DataFrame
+    targets: pl.DataFrame
+    rebalances: pl.DataFrame
+    turnover: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
     stop_reason: str | None = None
@@ -85,3 +88,26 @@ class CorrelationResult:
     values: pl.DataFrame
     metadata: dict[str, Any]
     diagnostics: pl.DataFrame
+
+
+@dataclass(frozen=True)
+class AllocationResult:
+    """Requested risky-asset weights and the trailing estimates that produced them."""
+    weights: pl.DataFrame
+    estimates: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RiskResult:
+    """Estimated covariance risk contributions, separate from realized attribution."""
+    values: pl.DataFrame
+    covariance: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RollingRiskResult:
+    """Prepared trailing net-return risk diagnostics, retaining run status/coverage."""
+    values: pl.DataFrame
+    metadata: dict[str, Any]

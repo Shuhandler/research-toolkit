@@ -1,9 +1,10 @@
 # Financial conventions
 
-Milestones 1A–1D implement the input/return conventions, account funding,
+Milestones 1A–1D and 2 implement the input/return conventions, account funding,
 entry costs, splits, dividends, cash/borrowing interest, debt repayment, and margin
-stops, performance ratios and benchmark comparisons below. Later allocation
-methods, CAGR, drawdown durations and per-period risk-free curves remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
+stops, performance ratios, benchmark comparisons, scheduled targets, allocation
+and risk estimates below. Advanced allocation, CAGR, drawdown durations and
+per-period risk-free curves remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
 
@@ -267,7 +268,7 @@ series produce an empty-sample diagnostic. Nonfinite inputs, invalid denominator
 duplicates, or missing interior observations raise before metric calculation.
 Short samples may be computable but must show n; computability is not reliability.
 
-## Later allocation and turnover conventions
+## Allocation and turnover conventions
 
 Gross exposure is `sum(abs(asset_value))`; net exposure is `sum(asset_value)`;
 leverage is gross exposure/equity. Position weights use net equity, so a leveraged
@@ -275,10 +276,89 @@ long portfolio can sum above 1. Cash, receivables, and negative debt weights mak
 the complete balance-sheet weights sum to 1. Initial risky proportions have a
 different denominator (gross risky exposure) and must be named accordingly.
 
-Turnover will report gross traded notional/opening equity, with entry separately
+Turnover reports gross traded notional/pre-trade equity, with entry separately
 labeled. If a half-turnover statistic is added it must have a different name.
-Drifting weights alone are not turnover. Planned volatility risk contribution is
+Drifting weights alone are not turnover. Estimated volatility risk contribution is
 `w_i*(Sigma*w)_i / sqrt(w' Sigma w)`, with covariance sample/window/annualization
 recorded; contributions sum to portfolio volatility under that stated model.
-Zero variance gives undefined contributions. These are later analytical estimates,
+Zero variance gives undefined contributions. These are analytical estimates,
 not a replacement for realized ledger attribution or financed cash-flow accounting.
+
+## Scheduled portfolios and historical estimates (implemented M2)
+
+The first release's buy-and-hold policy remains unchanged. Scheduled portfolios
+supply complete dated target baskets, explicit zero-weight exits, and a concentration
+limit on **risky proportions**, separate from target leverage against post-cost net
+equity. Actual proportions and leverage may drift between scheduled dates. A breach
+of the requested concentration limit raises, never clips weights or forces a later
+trade. Every decision precedes its execution; non-session dates raise and the final
+session is mark-only. Dates come from the declared calendar, not inferred holidays.
+
+For a scheduled close, old quantities (after any effective split) earn that day's
+price movement and ex-date entitlement. Financing and due payments precede the
+trade. The engine checks pre-trade solvency/margin; a breached account stops before
+a scheduled sale could conceal the breach. Otherwise it solves post-cost sizing,
+funds borrowing, executes sales before purchases, charges each proportional cost on
+absolute changed notional, and repays excess debt. The final close is checked again.
+No fill earns a price move that already happened. Shares/events, cash/debt,
+receivables, costs, P&L and equity reconcile through the same ledger as buy-and-hold.
+
+For pre-trade equity `E`, receivables `R`, current risky values `v`, target proportions
+`w`, leverage `L` and total proportional cost rates `k`, solve
+`x + sum(k_i * abs(w_i*N(x) - v_i)) = E` for positive post-cost equity `x`.
+Ordinary target notional is `N(x)=L*x`. The explicit `reserve` policy at `L<=1`
+uses `max(0, min(L*x, x-R))`, so unspendable dividend assets cannot cause an implicit
+new loan; any reduction in requested exposure is recorded. Existing debt can remain
+against unpaid receivables after liquidating all risky holdings and is repaid when
+cash arrives. `require_target` instead rejects a target at `L<=1` if it would leave
+debt. Leveraged targets use the supplied financing policy, including for receivable
+funding. All dividends still follow actual pay dates; reserve is not a second cost.
+
+M2's monotone proportional-cost solver requires per-asset total rates below 100%
+and `L*sum(w_i*k_i)<1`; unsupported extreme rates/funding fail explicitly. These are
+numerical/model scope limits, not market fee recommendations. Fixed, per-share,
+minimum and nonlinear costs require another tested sizing method before support.
+A 1e-13 relative notional tolerance suppresses only representation-level differences;
+other changed quantities create actual trades. No arbitrary minimum turnover or
+fee is inserted. The existing sub-cent currency reconciliation tolerance still applies.
+
+Gross turnover is `(sum(buy_notional) + sum(abs(sell_notional))) / pre_trade_equity`,
+with entry separately labeled. Unchanged quantities have zero trade turnover/cost.
+Financing and split events are not trades. Holding days do not implicitly rebalance.
+Pre-rebalance valuations are included in equity/drawdown reporting but do not add
+zero-duration observations to daily returns, volatility or Sharpe.
+
+Independent example without costs: a $100 portfolio owns $50 of each of A/B. A rises
+20%, B is flat, giving values $60/$50 and equity $110. A scheduled 50/50 target sells
+$5 A and buys $5 B, gross turnover `10/110`. If A then rises 10%, the new basket earns
+$5.50, while unchanged holdings would earn $6. With 1% costs, a complete switch from
+A to flat-priced B leaves `100*0.99/(1.01**2)` of equity after the original A entry,
+the A sale, and B purchase. It does not charge three full-portfolio round trips.
+
+Inverse-volatility and covariance calculations use common simple-return intervals
+ending strictly before the declared decision session. An integer window of at least
+two returns and explicit annualization are required; covariance/std use `ddof=1`.
+A zero-volatility asset cannot receive an inverse-volatility weight; raise rather
+than assigning infinity or dropping it. Concentration failure also raises. The
+result retains the sample start/end, prior interval start, count, basis and source.
+
+Raw analytical total returns can explicitly assume `reinvest_ex_close`, using
+`split_ratio*(close+ex_dividend_per_post_split_share)/prior_close-1`. This labels a
+reinvested entitlement index, not executable use of unpaid dividends. Portfolio
+simulation continues to distinguish entitlement and payment; users may instead
+supply their own documented return panel for allocation. Raw price-only returns
+remain split-discontinuous and should not be mistaken for total returns.
+
+Estimated Euler contributions use net-equity exposures `u=L*w`, annualized sample
+covariance `Sigma`, and portfolio volatility `sigma=sqrt(u' Sigma u)`:
+`contribution_i=u_i*(Sigma*u)_i/sigma`. They sum to sigma and can be negative when
+an asset offsets others. Null contributions with `zero_portfolio_volatility` replace
+undefined zero-risk ratios. This fixed-exposure covariance model treats cash and
+financing as deterministic; it is distinct from realized dollar attribution and
+from the path-dependent costs and margin behavior of the ledger.
+
+Rolling portfolio volatility and Sharpe use realized **net** returns through each
+closing session. They retain all early rows as null until the full window exists,
+with actual counts and reason codes. These are reporting diagnostics, not inputs
+available to place an order at that same close. Stopped runs require explicit
+partial-report opt-in and retain the actual dates and stop reason in plotted output.

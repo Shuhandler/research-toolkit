@@ -1,8 +1,10 @@
 """Execute the offline notebook with this Python, writing an inspected artifact.
 
 Run from any directory: python /path/to/research-toolkit/examples/run_acceptance.py
-The source notebook is never overwritten; output lives in artifacts/acceptance/.
+Use --milestone 2 for the scheduled-rebalancing notebook. Sources stay unchanged;
+output lives in artifacts/acceptance/ or artifacts/milestone2/.
 """
+import argparse
 from datetime import datetime, timezone
 import json
 import os
@@ -17,15 +19,20 @@ from jupyter_client.kernelspec import KernelSpec
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--milestone", choices=("1", "2"), default="1")
+    milestone = parser.parse_args().milestone
     root = Path(__file__).resolve().parents[1]
-    output = root / "artifacts" / "acceptance"
+    name = "buy_and_hold_equities" if milestone == "1" else "scheduled_rebalancing"
+    expected_figures = 9 if milestone == "1" else 6
+    output = root / "artifacts" / ("acceptance" if milestone == "1" else "milestone2")
     output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(output / "matplotlib-cache"))
     os.environ.setdefault("IPYTHONDIR", str(output / "ipython"))
     manager = KernelManager()
     manager._kernel_spec = KernelSpec(argv=[sys.executable, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
                                      display_name="Acceptance Python", language="python")
-    notebook = nbformat.read(root / "examples" / "buy_and_hold_equities.ipynb", as_version=4)
+    notebook = nbformat.read(root / "examples" / f"{name}.ipynb", as_version=4)
     client = NotebookClient(notebook, km=manager, timeout=180, resources={"metadata": {"path": str(root)}})
     try:
         client.execute()
@@ -34,9 +41,9 @@ def main():
             manager.shutdown_kernel(now=True)
     image_count = sum("image/png" in item.get("data", {})
                       for cell in notebook.cells for item in cell.get("outputs", []))
-    if image_count < 9:
-        raise RuntimeError(f"Expected at least nine inline chart images; found {image_count}")
-    nbformat.write(notebook, output / "buy_and_hold_equities.executed.ipynb")
+    if image_count < expected_figures:
+        raise RuntimeError(f"Expected at least {expected_figures} inline chart images; found {image_count}")
+    nbformat.write(notebook, output / f"{name}.executed.ipynb")
     def git(*args):
         result = subprocess.run(["git", *args], cwd=root, text=True, capture_output=True)
         return result.stdout.strip() if result.returncode == 0 else None
@@ -44,7 +51,7 @@ def main():
         "executed_at": datetime.now(timezone.utc).isoformat(), "python_executable": sys.executable,
         "git_revision": git("rev-parse", "HEAD"), "git_status": git("status", "--porcelain"),
     }, indent=2))
-    print(output / "buy_and_hold_equities.executed.ipynb")
+    print(output / f"{name}.executed.ipynb")
 
 
 if __name__ == "__main__":

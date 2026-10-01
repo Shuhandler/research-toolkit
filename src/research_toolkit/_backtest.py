@@ -1,4 +1,4 @@
-"""Daily buy-and-hold ledger: shares, cash, corporate actions, and trade costs."""
+"""Shared daily ledger for buy-and-hold and explicitly scheduled target baskets."""
 
 from collections import defaultdict
 from copy import deepcopy
@@ -15,6 +15,7 @@ from ._data import _validated_market
 from ._financing import Financing, _below_margin
 from ._portfolio import BuyHoldPolicy, _number, _weights
 from ._results import BacktestResult
+from ._rebalancing import RebalancePolicy, _targets, _basket
 
 
 try:
@@ -49,6 +50,12 @@ SCHEMAS = {
     "attribution": {"session": D, "component": S, "asset": S, "pnl": F},
     "receivables": {"session": D, "action_id": S, "asset": S, "ex_session": D,
                     "pay_date": D, "entitled_quantity": F, "amount": F, "outstanding": F},
+    "targets": {"decision_session": D, "session": D, "asset": S, "weight": F, "gross_leverage": F},
+    "rebalances": {"session": D, "decision_session": D, "equity_before": F, "equity_after": F,
+                   "target_gross_leverage": F, "actual_gross_leverage": F,
+                   "trade_cost": F, "gross_traded_notional": F, "receivable_reserved": F},
+    "turnover": {"session": D, "phase": S, "gross_traded_notional": F,
+                 "equity_before": F, "turnover": F},
     "diagnostics": {"session": D, "code": S, "residual": F, "tolerance": F},
 }
 
@@ -81,6 +88,40 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
     All results are numerical Polars tables. See ``docs/api.md`` for the complete
     input and output contracts. This function performs no network or file I/O.
     """
+    return _simulate(market, weights=weights, initial_capital=initial_capital,
+        entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
+        cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing)
+
+
+def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
+                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing):
+    """Execute explicit dated long-only targets through the shared daily ledger.
+
+    Target decisions precede execution, every basket includes zero-weight exits,
+    and no trade executes on the terminal session. See docs/api.md for schemas,
+    receivable funding rules, turnover denominators, and research margin stops.
+    """
+    if not isinstance(policy, RebalancePolicy) or not isinstance(financing, Financing):
+        raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing")
+    policy.__post_init__()
+    market = _validated_market(market)
+    table, plans = _targets(targets, market, entry_session, end_session, policy)
+    first_weights, first_leverage, _ = plans[entry_session]
+    for _, leverage, _ in plans.values():
+        if leverage > 1 and financing.maintenance_equity_ratio is None:
+            raise ValueError("any leveraged target requires maintenance_equity_ratio")
+        if leverage and _below_margin(1/leverage, financing.maintenance_equity_ratio):
+            raise ValueError("target leverage violates maintenance_equity_ratio")
+    initial_policy = BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
+        fractional_shares=True, initial_gross_leverage=first_leverage, terminal_action="mark_only")
+    return _simulate(market, weights=first_weights, initial_capital=initial_capital,
+        entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
+        financing=financing, schedule=plans, target_table=table, rebalance_policy=policy)
+
+
+def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
+              costs, cash_rate=None, cash_day_count=None, financing=None,
+              schedule=None, target_table=None, rebalance_policy=None):
     market = _validated_market(market)
     if market.metadata["price_basis"] != "raw":
         raise ValueError("buy_and_hold requires raw execution prices")
@@ -135,6 +176,12 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
         if action["asset"] in allocation:
             ex_dates[action["ex_session"]].append(action)
     records = {name: [] for name in SCHEMAS}
+    if target_table is not None:
+        records["targets"] = target_table.to_dicts()
+        # Validate all cost/leverage combinations before processing the first fill.
+        for target_weights, target_leverage, _ in schedule.values():
+            _basket({a: 0. for a in assets}, capital, 0., target_weights,
+                    target_leverage, rates, rebalance_policy.receivable_policy)
     quantity = {a: 0.0 for a in assets}
     cash = capital
     debt = 0.0
@@ -148,7 +195,7 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
         seq = len(records["events"])
         records["events"].append({
             "event_id": f"E{seq:06d}", "date": day,
-            "time": closes[day] if phase in {"entry_close", "close"} else None,
+            "time": closes[day] if phase in {"entry_close", "rebalance_close", "close"} else None,
             "sequence": seq, "phase": phase, "type": kind, "asset": asset,
             "action_id": action_id, "trade_id": trade_id,
             "quantity_delta": dq, "cash_delta": dc, "debt_delta": dd,
@@ -168,7 +215,7 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
         if (not all(math.isfinite(v) for v in (mv, cash, receivable, debt, equity))
                 or min(cash, receivable, debt) < 0):
             raise ArithmeticError("ledger produced invalid balances")
-        if phase != "close" and equity <= 0:
+        if phase in {"pre_entry", "post_entry"} and equity <= 0:
             raise ValueError("initial equity after costs must be positive")
         records["valuations"].append({"session": day, "time": closes[day], "phase": phase,
                                       "market_value": mv, "cash": cash, "debt": debt,
@@ -251,6 +298,90 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
                                           "weight": values[asset] / equity if equity > 0 else None})
 
     position_rows(entry_session, previous_values, post_entry_equity)
+    records["turnover"].append({"session": entry_session, "phase": "entry",
+        "gross_traded_notional": entry_notional, "equity_before": capital,
+        "turnover": entry_notional/capital})
+
+    def rebalance(day, values, outstanding, equity):
+        nonlocal cash, debt
+        target_weights, target_leverage, decision = schedule[day]
+        changes, cost = _basket(values, equity, outstanding, target_weights,
+                                target_leverage, rates, rebalance_policy.receivable_policy)
+        new_net_cash = math.fsum([cash, -debt, -math.fsum(changes.values()), -cost])
+        new_debt = max(-new_net_cash, 0.)
+        tolerance = min(.009, 1e-8 + 1e-12*max(capital, equity))
+        if new_debt <= tolerance and target_leverage <= 1:
+            new_debt = 0.
+        if target_leverage <= 1 and new_debt > tolerance and (
+                rebalance_policy.receivable_policy == "require_target" or new_debt > debt + tolerance):
+            raise ValueError(f"target on {day} requires financing unspendable receivables; use reserve or hold cash")
+        if new_debt > 0 and threshold is None:
+            raise ValueError("borrowing requires maintenance_equity_ratio")
+        # Borrow only the funded basket's required net debt, execute sales before
+        # purchases, then repay excess debt. No transient funding deficits.
+        if new_debt > debt:
+            borrowing = new_debt-debt
+            cash += borrowing
+            debt += borrowing
+            event(day, "borrowing", phase="rebalance_close", dc=borrowing, dd=borrowing)
+        for asset in sorted(assets, key=lambda a: (changes[a] >= 0, a)):
+            notional = changes[asset]
+            if notional == 0:
+                continue
+            mark = prices[day, asset]
+            delta = notional/mark
+            if values[asset]+notional == 0.:
+                delta = -quantity[asset]
+            next_quantity = quantity[asset]+delta
+            if next_quantity < 0 and math.isclose(next_quantity, 0., abs_tol=1e-12):
+                next_quantity = 0.
+            if next_quantity < 0 or not math.isfinite(next_quantity):
+                raise ValueError("scheduled quantity is not representable")
+            component_costs = {c: abs(notional)*rates[c][asset] for c in rates}
+            trade_cost = math.fsum(component_costs.values())
+            trade_id = f"T{len(records['trades']):06d}"
+            quantity[asset] = next_quantity
+            cash -= notional+trade_cost
+            event(day, "trade", phase="rebalance_close", asset=asset, trade_id=trade_id,
+                  dq=delta, dc=-notional)
+            records["trades"].append({"trade_id": trade_id, "session": day, "time": closes[day],
+                "asset": asset, "signed_quantity": delta, "reference_price": mark,
+                "signed_notional": notional, "execution": "scheduled_close", "trade_cost": trade_cost})
+            for component, amount in component_costs.items():
+                if not amount:
+                    continue
+                records["costs"].append({"cost_id": f"C{len(records['costs']):06d}", "date": day,
+                    "time": closes[day], "trade_id": trade_id, "asset": asset,
+                    "component": component, "amount": amount, "basis": "modeled"})
+                event(day, component, phase="rebalance_close", asset=asset, trade_id=trade_id, dc=-amount)
+                pending_pnl[component, asset].append(-amount)
+            if cash < -tolerance:
+                raise ArithmeticError("scheduled trade basket has an unfunded purchase")
+        if debt > new_debt:
+            repayment = debt-new_debt
+            debt = new_debt
+            cash -= repayment
+            event(day, "debt_repayment", phase="rebalance_close", dc=-repayment, dd=-repayment)
+        expected_cash = max(new_net_cash, 0.)
+        residual, tol = _check(cash, expected_cash, max(capital, equity), "rebalance_cash_roundoff")
+        records["diagnostics"].append({"session": day, "code": "rebalance_cash_roundoff",
+                                      "residual": residual, "tolerance": tol})
+        cash = expected_cash
+        gross = math.fsum(quantity[a]*prices[day, a] for a in assets)
+        after = math.fsum([gross, cash, outstanding, -debt])
+        residual, tol = _check(after, equity-cost, max(capital, equity), "rebalance_cost_equity")
+        records["diagnostics"].append({"session": day, "code": "rebalance_cost_equity",
+                                      "residual": residual, "tolerance": tol})
+        if after <= 0:
+            raise ValueError("positive post-trade equity is not representable")
+        traded = math.fsum(abs(v) for v in changes.values())
+        records["rebalances"].append({"session": day, "decision_session": decision,
+            "equity_before": equity, "equity_after": after, "target_gross_leverage": target_leverage,
+            "actual_gross_leverage": gross/after, "trade_cost": cost, "gross_traded_notional": traded,
+            "receivable_reserved": (max(0., target_leverage*after-max(0., after-outstanding))
+                if target_leverage <= 1 and rebalance_policy.receivable_policy == "reserve" else 0.)})
+        records["turnover"].append({"session": day, "phase": "rebalance", "gross_traded_notional": traded,
+                                   "equity_before": equity, "turnover": traded/equity})
     opening_equity, previous_session = capital, entry_session
     cumulative_pnls, simple_returns = [], []
     wealth = 1.0
@@ -302,9 +433,20 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
             debt -= repayment
             event(day, "debt_repayment", dc=-repayment, dd=-repayment)
         if day in session_set:
-            values, outstanding, equity = balances(day, "close")
+            # Old holdings earn the interval's price move. Rebalancing at this
+            # close affects only future price P&L, with trade costs booked today.
+            before = {a: quantity[a]*prices[day, a] for a in assets}
             for asset in assets:
-                pending_pnl["price_pnl", asset].append(values[asset] - previous_values[asset])
+                pending_pnl["price_pnl", asset].append(before[asset] - previous_values[asset])
+            if schedule and day in schedule:
+                before, outstanding, before_equity = balances(day, "pre_rebalance")
+                peak = max(peak, before_equity)
+                before_gross = math.fsum(before.values())
+                # A pre-trade failure cannot be hidden by a scheduled deleveraging.
+                if before_equity > 0 and not _below_margin(
+                        before_equity/before_gross if before_gross else None, threshold):
+                    rebalance(day, before, outstanding, before_equity)
+            values, outstanding, equity = balances(day, "close")
             components = {key: math.fsum(amounts) for key, amounts in pending_pnl.items()}
             pnl = equity - opening_equity
             cumulative_pnls.append(pnl)
@@ -379,6 +521,15 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
         "package_version": PACKAGE_VERSION, "python_version": platform.python_version(),
         "polars_version": pl.__version__,
     }
+    if schedule is not None:
+        metadata.update(strategy="scheduled_rebalance", rebalance_policy=asdict(rebalance_policy),
+            dividend_policy="ex_date_receivable_pay_date_cash_reinvest_only_via_scheduled_trades",
+            decision_timing="decision_session_strictly_before_execution",
+            concentration_denominator="target_risky_asset_proportion",
+            target_weight_normalization="divide_by_basket_sum_within_1e-12_roundoff",
+            margin_monitoring="before_scheduled_trade_and_after_session_close",
+            turnover_denominator="pre_trade_equity_entry_separately_labeled",
+            no_trade_relative_tolerance=1e-13)
     return BacktestResult(**{name: pl.DataFrame(rows, schema=SCHEMAS[name])
                              for name, rows in records.items()}, metadata=metadata,
                           status=status, stop_reason=stop_reason,

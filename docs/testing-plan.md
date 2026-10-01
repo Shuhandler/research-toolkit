@@ -1,7 +1,7 @@
 # Testing plan and implemented checks
 
 Prioritize independent financial examples and ledger identities over coverage
-percentages or tests that mirror implementation. Milestone 1A–1D tests now cover
+percentages or tests that mirror implementation. Milestone 1A–1D and 2 tests now cover
 data validation, return arithmetic, entry costs, actions, cash interest, drift,
 scaling, leverage, financing, debt repayment, stopped runs, and accounting identities
 using synthetic Polars tables and independent expected values. Performance,
@@ -131,3 +131,34 @@ Validation environments: Python 3.14.6 / Polars 1.44.2 / Matplotlib 3.11.2 and P
 suite and notebook. The source notebook stays output-free; the runner writes an
 executed artifact with figures and environment/revision provenance. Exact current
 acceptance dependencies are pinned separately from consumer requirements.
+
+## Implemented milestone 2 checks
+
+Use independent two-asset hand calculations before trusting the larger monthly
+example. A $60/$50 drifted basket rebalanced to 50/50 sells/buys $5 and reports
+`10/110` gross turnover; a later 10% A rise earns $5.50. A complete switch with
+1% proportional fees leaves `100*0.99/(1.01**2)` after entry/sale/purchase.
+Unchanged quantities and pure splits create no spurious trades or repeated fees.
+Asymmetric commission/spread rates match actual changed notionals.
+
+Tests reconstruct each closing quantity, cash, debt, receivable, market value and
+attribution from independent exported events/records, including a $10 million
+monthly five-asset run. They cover leverage increases/decreases, all-cash targets,
+concentration drift without hidden trades, dividends earned before selling, and
+reserve versus rejected unfunded targets. A pre-trade margin breach must stop
+before scheduled deleveraging, and full/rolling reports preserve the stop guard.
+An initial-only schedule matches buy-and-hold's financial tables exactly.
+
+Inverse-volatility tests use known 1:2 volatilities and expect 2/3:1/3 proportions;
+concentration breaches raise without clipping. Zero-volatility assets and inadequate
+windows raise. Covariance contributions reconcile to portfolio volatility, preserve
+negative offsets, and return explicit nulls for zero portfolio volatility. Changing
+returns on/after a decision cannot change that allocation or risk estimate; changing
+future marks cannot change past scheduled fills. Raw total-return tests verify
+splits/dividends, explicit reinvestment semantics and the cash-held ledger difference.
+
+Rolling tests check full-window warm-up, sample counts, flat windows, and partial
+coverage. Headless plot tests inspect dates/values and reuse caller axes. The M2
+notebook is executed with acquisition blocked and six embedded charts, with manual
+visual inspection and separately written Markdown interpretation. Both supported
+validation environments continue to run M1 regression checks.
