@@ -755,3 +755,116 @@ Metadata stores the full policy under `dividend_reinvestment`, plus payment
 availability, standing payer instruction, budget, margin and turnover conventions.
 No new runtime dependencies or network access are required. See
 [the runnable example](../examples/dividend_reinvestment.py).
+
+## Historical SOFR financing
+
+`rt.SOFRFinancing` is an alternative to `rt.Financing`, accepted as `financing=` by
+both `buy_and_hold` and `scheduled_rebalance`, including dividend-reinvestment runs.
+All fields below are explicit. The old fixed-rate mode and legacy cash-rate pair
+retain their behavior. Do not mix a financing object with legacy cash arguments.
+
+```python
+financing = rt.SOFRFinancing(
+    rates=sofr_rates,
+    publication_calendar=sofr_publications,
+    metadata=sofr_source_metadata,
+    borrowing_spread_bps=100.0,      # Example modeled spread, not a default.
+    cash_rate=0.0,                  # Fixed cash rate, independent of SOFR.
+    day_count="ACT/360",
+    cash_day_count="ACT/365F",
+    rate_timing="known_at_accrual_start",
+    max_rate_age_days=7,
+    maintenance_equity_ratio=0.25,
+    on_breach="stop",
+    cash_sweep="repay_debt",
+)
+# Supply financing=financing in either existing backtest call.
+```
+
+### Rate inputs and provenance
+
+Both tables are eager Polars DataFrames with exact schemas and unique observation
+dates; no null/nonfinite values or implicit casts. Inputs are copied and sorted.
+
+| Table | Columns |
+| --- | --- |
+| `rates` | `observation_date: Date`, `sofr: Float64` (annual decimal; 5% = 0.05) |
+| `publication_calendar` | `observation_date: Date`, `available_at: Datetime(us, UTC)` |
+
+The calendar must be supplied independently as complete for the declared coverage,
+with **exactly the same observation keys** as the rate table. This rejects a
+missing expected observation rather than silently carrying an older quote through
+it. Include enough history before entry to seed the first cutoff. Availability
+must fall after the observation date in New York, increase strictly with
+observation dates, and not follow `retrieved_at`. No holiday dates, publication
+hours or revision vintages are guessed. Later revisions must not be presented as
+known earlier; reconstruct verified vintages before using this interface.
+
+`metadata` is a finite JSON dictionary requiring:
+
+- Nonblank `source`, `calendar`, `calendar_version`.
+- UTC ISO `retrieved_at`; ISO `coverage_start`/`coverage_end` covering all requested
+  calendar accrual dates (first day after entry through ending session).
+- `currency="USD"`, `rate_units="decimal"`, `timezone="America/New_York"`.
+- `calendar_complete=True`, `vintage="point_in_time"` source assertions.
+
+Other provenance fields may be added. The library checks consistency, not the
+truth of a provider's asserted completeness or vintage. Only USD portfolios are
+supported. Negative SOFR/spreads/cash rates raise; no automatic rate floor exists.
+`max_rate_age_days` is a required positive integer, excluding bool.
+
+`financing.snapshot_id` is a deterministic SHA-256 identity of the canonical input
+tables and metadata. Mutating owned tables/metadata after construction is detected
+at simulation; construct a new configuration to change inputs.
+
+### Rate selection and accounting
+
+The only initial `rate_timing` is `known_at_accrual_start`: at New York midnight
+on each posted accrual date, use the latest supplied observation available by that
+time (equality allowed). This is a deliberately lagged, known-rate loan convention.
+A Monday morning publication first affects Tuesday's charge. Missing initial data,
+exceeded age limits (accrual date minus observation date), and incomplete declared
+coverage raise before any simulation. Weekend/holiday carry is permitted only
+under this explicit timing policy and age limit. No market prices are filled.
+
+Borrowing uses `sofr + borrowing_spread_bps/10_000`; cash continues to use fixed
+`cash_rate`. `day_count` and `cash_day_count` independently accept `ACT/360` or
+`ACT/365F`. Opening calendar-day balances accrue once before actions/payments and
+sweeps; interest capitalizes daily, including non-session dates. This is not the
+SOFR Index or a broker-specific billing model. Interest on a weekend is attributed
+to the next supplied market session, without an invented daily market-return row.
+
+Margin, debt sweeps, dividend reservation, scheduled funding and stopped-run rules
+remain those of the shared ledger. Requested rate coverage is validated even for
+zero borrowing or an eventually stopped run; posted audit rows end at the actual
+stop. Cash and loan interest remain distinct from performance risk-free rates.
+
+### Audit and replay
+
+`result.financing_accruals` is populated for SOFR mode and typed empty otherwise.
+It contains one row per processed calendar date, including zero-balance dates:
+
+| Columns | Type / meaning |
+| --- | --- |
+| `date` | Date; posted accrual date |
+| `cutoff_at`, `available_at` | Datetime(us, UTC); selection cutoff and selected vintage availability |
+| `observation_date`, `rate_age_days` | Date, Int64; selected observation and age in calendar days |
+| `sofr`, `borrowing_spread_bps`, `borrowing_rate`, `cash_rate` | Float64; annual decimal rates except spread in basis points |
+| `borrowing_day_fraction`, `cash_day_fraction` | Float64; 1/360 or 1/365 |
+| `opening_debt`, `opening_cash` | Float64; balances before that calendar date's accrual/actions |
+| `borrowing_interest`, `cash_interest` | Float64; posted monetary amounts, including explicit zeros |
+
+Join `date` to borrowing-interest cost rows or cash-interest events to reconcile
+postings. Nonzero loan charges still have `component="borrowing_interest"`, with
+null trade/asset IDs. All normal position, cash/debt, attribution, return and equity
+reconciliations apply. Performance and plots consume these results normally.
+
+`result.metadata["borrowing_rate"]` is **None** in variable-rate mode, not a final
+or average rate presented as constant. `metadata["financing"]` contains the full
+configuration, source metadata, snapshot identity, and exact rate/publication rows
+with ISO dates/timestamps, all JSON-serializable. Market snapshot persistence is
+unchanged; save separate SOFR tables with Polars Parquet and source metadata as
+JSON, or reconstruct them from the embedded run records. No network access or
+provider dependency occurs in financing/simulation. See the
+[offline runnable example](../examples/historical_sofr.py), which uses synthetic
+rates rather than claiming historical market results.

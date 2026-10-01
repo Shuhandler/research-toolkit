@@ -128,3 +128,26 @@ budget. Payments are assumed available before the close. It does not model broke
 DRIP discounts, exact fills, withholding or per-asset enrollment. The final session
 remains mark-only. This example does not change the existing acceptance notebooks'
 cash-held dividend assumptions or their interpretation.
+
+## Historical SOFR interface
+
+[historical_sofr.py](historical_sofr.py) is an offline, hand-checkable demonstration
+of the historical-rate interface. **Both SOFR values and stock prices are
+synthetic**, chosen for simple arithmetic; it is not a historical performance claim.
+It prints each selected fixing and charge, plus daily debt/equity/P&L:
+
+```sh
+python examples/historical_sofr.py
+```
+
+Outputs go to ignored `artifacts/historical_sofr/`: daily/accrual CSV tables and
+full JSON run metadata, including rate/calendar source records. Import
+`run_example()` in a notebook to inspect the result without writing files.
+
+For real research, replace `rates` with saved, permitted annual-decimal observations
+and `publication_calendar` with complete verified observation/availability records.
+Do not create that calendar by dropping missing rows from the rate file. Document
+units, coverage and point-in-time vintage; current revised history alone is not
+proof of past availability. The source metadata assertions are the caller's
+responsibility. The example and library never download rates. Publication/day-count
+background is linked in [financial conventions](../docs/financial-conventions.md#historical-sofr-loan-convention).

@@ -181,7 +181,7 @@ report the same economic cost once. No repeated cost on unchanged holdings, and
 no automatic round-trip fee per observation. A sale incurs its own cost only if
 a sale is actually simulated. Financing can accrue even when there are no trades.
 
-Financing rates are stated **nominal annual** rates with ACT/365F calendar-day
+The original fixed-rate `Financing` rates are **nominal annual** rates with ACT/365F calendar-day
 accrual. At each calendar date after entry through the ending session date,
 charge `opening_debt * borrowing_rate / 365` and credit
 `opening_cash * cash_rate / 365`; post the charge into debt and interest into cash
@@ -196,8 +196,9 @@ The named `repay_debt` cash sweep uses available cash to repay debt after paymen
 and interest, with any excess kept as cash. With reinvestment enabled,
 `before_debt_repayment` reserves paid dividend principal from this sweep until
 execution or release; `after_debt_repayment` leaves the sweep unchanged. The sweep
-itself does not sell shares or maintain leverage. Constant rates are M1 assumptions; dated rate
-curves and different day counts are later extensions. Risk-free rates used for
+itself does not sell shares or maintain leverage. Constant rates remain the M1 mode. The historical SOFR extension below supplies
+dated loan rates with explicit day counts; arbitrary curves and other billing
+conventions remain future work. Risk-free rates used for
 metrics are independent of these cash/borrowing rates.
 
 For leveraged runs require a caller-supplied maintenance equity/gross-exposure
@@ -417,3 +418,63 @@ For every paid action the audit must reconcile:
 `cash_released` is cash returned to unrestricted account funding, not a promise
 that it remains in closing cash. These audit allocations are not extra ledger
 cash movements. Events, positions, all costs, P&L and equity still reconcile.
+
+## Historical SOFR loan convention
+
+SOFR observations describe overnight transactions and are published subsequently.
+The New York Fed describes actual-calendar-day/360 calculations and publication
+and revision timing in its [reference-rate methodology](https://www.newyorkfed.org/markets/reference-rates/additional-information-about-reference-rates).
+These facts motivate separate observation and availability fields; they do not
+uniquely specify a brokerage financing agreement.
+
+`SOFRFinancing` implements this explicit research model:
+
+1. For every calendar date after entry through the requested ending session,
+   establish the cutoff at **00:00 America/New_York on that date**, stored in UTC.
+   Select the latest observation whose supplied availability timestamp is at or
+   before that cutoff. A rate published later that morning cannot affect that
+   day's charge. Rates known at the cutoff are deliberately lagged relative to
+   overnight transaction observation dates. No intra-day repricing occurs.
+2. Carry the latest available observation only under this named policy, with an
+   explicit maximum age measured as accrual date minus observation date in calendar
+   days. The supplied publication calendar must contain every expected observation;
+   each must have a rate. A missing rate is not treated as a holiday. Coverage must
+   include the whole requested run, even if it later stops or has no debt.
+3. `loan_rate = sofr + borrowing_spread_bps / 10_000`. Inputs are annual decimal
+   rates, not percentages. For `ACT/360`, charge `opening_debt * loan_rate / 360`;
+   `ACT/365F` instead divides by 365. Cash uses its separately declared fixed rate
+   and day count. No risk-free metric rate is inferred from SOFR.
+4. Post interest to debt/cash before that date's actions, payments, sweep or trades.
+   Capitalize every calendar day, including weekends. Day fractions remain 1/360
+   or 1/365 on daylight-saving transitions; no hourly proration is implied. Entry
+   receives no charge; its first subsequent date receives one whole daily charge,
+   consistent with the existing daily ledger. Stops retain charges through the
+   failure close only, with no later postings.
+
+Example: a $100 loan, synthetic annual SOFR 3.6%, 36bps spread and ACT/360 grows
+by factor 1.00011 per calendar day. If Thursday's observation is published Friday
+morning and Friday's is published Monday morning, the Thursday observation funds
+Saturday, Sunday and Monday accrual rows; Friday's first funds Tuesday. If the new
+SOFR is 7.2%, Tuesday's factor becomes 1.00021. These are synthetic arithmetic
+examples, not reported historical rate values.
+
+The official SOFR Index's treatment of overnight observation periods and
+nonbusiness-day simple interest differs from this loan's daily capitalization and
+availability-based reset. Do not label this model an exact index replication or
+an in-arrears overnight contract. Matching a broker requires its reset, spread,
+settlement and billing terms. This version supports nonnegative SOFR/spreads and
+fixed nonnegative cash rates; negative inputs raise, with no implicit floor.
+
+Publication timestamps must reflect availability of the supplied rate vintage.
+A contemporary download containing later revisions must not be labeled
+point-in-time history without verification. Multiple intraday vintages and their
+reconstruction are not supported; one chronological available vintage per
+observation is required. The complete publication calendar and declared metadata
+remain the caller's responsibility; no exchange holiday rules are inferred.
+
+`financing_accruals` ties each selected observation/cutoff, rate, spread, day fraction
+and opening balance to cash interest and borrowing costs. Zero-balance dates still
+get audit rows; no zero-value ledger cost event is invented. Source input identity,
+all supplied observations/calendar rows and policy are embedded in run metadata.
+The loan spread/cash rate and balance/capitalization rules are modeling assumptions;
+the benchmark observations retain separate source provenance.

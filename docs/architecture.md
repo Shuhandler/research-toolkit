@@ -17,7 +17,8 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_portfolio.py` | Equal/custom weights, exposure and drift calculations | 1B |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_dividends.py` | Explicit payment-funded reinvestment policy; execution stays in the shared ledger | Post-M2 |
-| `_financing.py` | Explicit cash/loan rates, day count, sweep and margin configuration | 1C |
+| `_financing.py` | Explicit fixed cash/loan rates, day count, sweep and margin configuration | 1C |
+| `_sofr.py` | Historical SOFR/publication contracts, source identity, known-rate selection and loan policy | Post-M2 |
 | `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
 | `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
 | `_metrics.py` | Performance tables, benchmark comparisons, result validation | 1D |
@@ -119,6 +120,7 @@ Implemented `BacktestResult` contains the tables below plus a per-action
 | `events` | `event_id`; time and deterministic sequence, type, asset/action/trade identifiers, quantity/cash/debt/receivable deltas |
 | `valuations` | `(time, phase)`; pre-entry, post-entry, pre-trade checks, and closing balance-sheet values |
 | `dividend_reinvestments` | Paid action ID; funding disposition, execution session, linked trade/cost, and status |
+| `financing_accruals` | SOFR calendar accrual date; publication/cutoff, rate/spread, opening balances and posted interest |
 | `attribution` | `(session, component, asset if applicable)`; dollar contribution, including financing and cost rows |
 | `diagnostics` | session, code, currency reconciliation residual and tolerance |
 
@@ -261,3 +263,21 @@ receivable/payment model. All plots consume the prepared containers.
 schemas, funding/receivable choices, concentration and cost solver limits, units,
 turnover denominators and null reasons. Fixed/nonlinear cost models, signal
 execution, shorts and broker-specific margin rules are still future extensions.
+
+## Historical funding input boundary
+
+`SOFRFinancing` owns copied Polars rate/publication tables and source metadata.
+Its deterministic `snapshot_id` identifies those source inputs, separately from
+market data identity. The simulator revalidates mutation and requested coverage,
+then resolves a calendar-day rate plan without I/O. The shared engine posts
+interest through existing cash/debt events and attribution. No second accounting
+engine, provider SDK, or plotting dependency is introduced.
+
+A rate table alone cannot distinguish an omitted fixing from a holiday. The
+separate supplied publication calendar defines expected observations and when the
+provided vintage was available. Its completeness is a source assertion, like
+market action/calendar coverage; the library validates consistency but cannot
+independently certify the external source's calendar. Source rows and configuration
+are embedded in run metadata as JSON for offline audit/reconstruction. Market
+`save_snapshot`/`load_snapshot` still store market inputs only; callers may store
+SOFR inputs separately using Polars Parquet plus JSON metadata.

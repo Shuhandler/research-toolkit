@@ -151,3 +151,12 @@ per-payment audits and pre/post-trade margin checks reconcile through the existi
 ledger. Broker-specific DRIP fills/timestamps, tax withholding, per-asset enrollment
 and fixed/minimum fee models remain outside this extension. Milestone 3 is still
 the next planned implementation phase.
+
+## User-requested historical SOFR extension — implemented
+
+The optional `SOFRFinancing` policy supplies USD historical benchmark-plus-spread
+borrowing to both simulators, with explicit publication timing, calendar coverage,
+rate age, day counts and per-calendar-day accrual audits. Fixed-rate financing
+remains supported. Offline tests verify known-rate selection, actual posting and
+reconciliations. Source adapters, historical vintage reconstruction, SOFR-linked
+cash rates, signed rates/spreads and alternate interest billing are deferred.

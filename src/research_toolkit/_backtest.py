@@ -13,6 +13,7 @@ import polars as pl
 from ._costs import TradeCosts
 from ._data import _validated_market
 from ._financing import Financing, _below_margin
+from ._sofr import SOFRFinancing, _sofr_plan
 from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, _number, _weights
 from ._results import BacktestResult
@@ -60,6 +61,10 @@ SCHEMAS = {
     "dividend_reinvestments": {"action_id": S, "asset": S, "pay_date": D,
         "session": D, "paid_amount": F, "debt_repaid": F, "cash_released": F,
         "signed_notional": F, "trade_cost": F, "trade_id": S, "status": S},
+    "financing_accruals": {"date": D, "cutoff_at": UTC, "observation_date": D,
+        "available_at": UTC, "rate_age_days": I, "sofr": F, "borrowing_spread_bps": F,
+        "borrowing_rate": F, "cash_rate": F, "borrowing_day_fraction": F, "cash_day_fraction": F,
+        "opening_debt": F, "opening_cash": F, "borrowing_interest": F, "cash_interest": F},
     "diagnostics": {"session": D, "code": S, "residual": F, "tolerance": F},
 }
 
@@ -78,7 +83,7 @@ def _check(actual, expected, scale, context):
 def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date,
                  end_session: date, policy: BuyHoldPolicy, costs: TradeCosts,
                  cash_rate: float | None = None, cash_day_count: str | None = None,
-                 financing: Financing | None = None,
+                 financing: Financing | SOFRFinancing | None = None,
                  dividend_reinvestment: DividendReinvestment | None = None) -> BacktestResult:
     """Run a fractional-share, raw-close buy-and-hold portfolio with explicit funding.
 
@@ -102,7 +107,7 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
-                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing,
+                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing | SOFRFinancing,
                         dividend_reinvestment: DividendReinvestment | None = None):
     """Execute explicit dated long-only targets through the shared daily ledger.
 
@@ -110,8 +115,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     and no trade executes on the terminal session. See docs/api.md for schemas,
     receivable funding rules, turnover denominators, and research margin stops.
     """
-    if not isinstance(policy, RebalancePolicy) or not isinstance(financing, Financing):
-        raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing")
+    if not isinstance(policy, RebalancePolicy) or not isinstance(financing, (Financing, SOFRFinancing)):
+        raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing or SOFRFinancing")
     policy.__post_init__()
     market = _validated_market(market)
     table, plans = _targets(targets, market, entry_session, end_session, policy)
@@ -144,14 +149,24 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         dividend_reinvestment.__post_init__()
     capital = _number(initial_capital, "initial_capital", positive=True)
     exposure = policy.initial_gross_leverage
+    sofr_plan = None
+    borrowing_denominator, cash_denominator = 365, 365
     if financing is not None:
-        if not isinstance(financing, Financing):
-            raise ValueError("financing must be an explicit Financing object")
+        if not isinstance(financing, (Financing, SOFRFinancing)):
+            raise ValueError("financing must be an explicit Financing object or SOFRFinancing object")
         if cash_rate is not None or cash_day_count is not None:
             raise ValueError("do not mix financing with cash_rate/cash_day_count")
-        financing.__post_init__()
-        rate, borrowing_rate = financing.cash_rate, financing.borrowing_rate
-        cash_day_count = financing.day_count
+        rate = financing.cash_rate
+        if isinstance(financing, SOFRFinancing):
+            # Validate/copy mutable rate inputs below, after checking run dates.
+            borrowing_rate = None
+            cash_day_count = financing.cash_day_count
+            borrowing_denominator = 360 if financing.day_count == "ACT/360" else 365
+            cash_denominator = 360 if cash_day_count == "ACT/360" else 365
+        else:
+            financing.__post_init__()
+            borrowing_rate = financing.borrowing_rate
+            cash_day_count = financing.day_count
         threshold = financing.maintenance_equity_ratio
     else:
         if exposure > 1:
@@ -169,6 +184,10 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     all_sessions = market.sessions["session"].to_list()
     if entry_session not in all_sessions or end_session not in all_sessions or entry_session >= end_session:
         raise ValueError("entry/end must be supplied sessions with at least one holding interval")
+    if isinstance(financing, SOFRFinancing):
+        sofr_plan, financing_metadata = _sofr_plan(financing, entry_session, end_session, market.metadata["currency"])
+    else:
+        financing_metadata = asdict(financing) if financing else None
     allocation = _weights(weights, market.prices["asset"].unique().to_list())
     assets = sorted(allocation)
     total_weight = math.fsum(allocation.values())
@@ -487,12 +506,18 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     session_set = set(dates)
     status, stop_reason, stop_session, stop_time = "complete", None, None, None
     while day <= end_session:
-        interest = cash * (rate / 365)
+        daily_borrowing_rate = sofr_plan[day]["borrowing_rate"] if sofr_plan is not None else borrowing_rate
+        interest = cash * (rate / cash_denominator)
+        borrowing_charge = debt * (daily_borrowing_rate / borrowing_denominator)
+        if sofr_plan is not None:
+            records["financing_accruals"].append({"date": day, **sofr_plan[day],
+                "cash_rate": rate, "borrowing_day_fraction": 1/borrowing_denominator,
+                "cash_day_fraction": 1/cash_denominator, "opening_debt": debt, "opening_cash": cash,
+                "borrowing_interest": borrowing_charge, "cash_interest": interest})
         if interest:
             cash += interest
             event(day, "cash_interest", dc=interest)
             pending_pnl["cash_interest", None].append(interest)
-        borrowing_charge = debt * (borrowing_rate / 365)
         if borrowing_charge:
             debt += borrowing_charge
             event(day, "borrowing_interest", dd=borrowing_charge)
@@ -629,7 +654,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         "stop_time": stop_time.isoformat() if stop_time else None,
         "policy": asdict(policy), "cost_rates": rates, "cost_basis": "modeled",
         "cash_rate": rate, "cash_day_count": cash_day_count, "cash_capitalization": "daily_calendar_date",
-        "financing": asdict(financing) if financing else None,
+        "financing": financing_metadata,
         "borrowing_rate": borrowing_rate, "maintenance_equity_ratio": threshold,
         "margin_monitoring": "session_close", "margin_comparison_relative_tolerance": 1e-12,
         "return_denominator": "first_interval_pre_entry_capital_then_prior_closing_equity",

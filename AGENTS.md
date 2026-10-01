@@ -61,6 +61,14 @@
   margin checks. Do not silently turn a target concentration limit into a rule that
   trades whenever actual weights drift. Analytical ex-date-reinvested returns are
   distinct from the executable receivable/cash ledger.
+- Keep fixed-rate and historical SOFR financing distinct. SOFR rates require a
+  complete supplied publication calendar, point-in-time availability timestamps,
+  declared coverage/units and an age limit. Never apply an observation before its
+  publication, silently invent holiday dates, infer percent-to-decimal conversion,
+  or substitute a current quote for missing history. Preserve ACT/360 versus
+  ACT/365F, separate cash/loan rates, and the daily accrual audit. The current SOFR
+  model uses rates known at New York midnight and daily capitalization; do not
+  describe it as the official SOFR Index or a broker's exact loan contract.
 - Charge transaction costs on actual trades. Reconcile positions, trades, cash,
   receivables, debt, costs, P&L, and equity. State the equity denominator used for
   returns, including entry costs and any external flows.

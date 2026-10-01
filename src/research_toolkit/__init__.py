@@ -7,6 +7,7 @@ from ._results import AllocationResult, RiskResult, RollingRiskResult
 from ._costs import TradeCosts
 from ._data import prepare_market_data
 from ._financing import Financing
+from ._sofr import SOFRFinancing
 from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, equal_weights
 from ._results import BacktestResult, MarketData, ReturnResult, PerformanceResult, CorrelationResult
@@ -16,6 +17,7 @@ from . import plots
 from ._returns import cumulative_returns, returns
 
 __all__ = [
+    "SOFRFinancing",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",
     "AllocationResult", "RiskResult", "RollingRiskResult", "scheduled_rebalance", "RebalancePolicy", "prepare_market_data", "returns", "cumulative_returns", "equal_weights", "buy_and_hold",

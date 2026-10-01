@@ -38,3 +38,7 @@ Existing M1 tests still run against the shared engine.
 `test_dividend_reinvestment.py` covers opt-in payment-funded DRIP, both debt
 priorities, timing/splits/entitlements, actual costs, scheduled/terminal collisions,
 margin stops, per-payment audits and independent ledger reconciliations.
+
+`test_sofr.py` covers historical-rate input contracts, publication-aware selection,
+calendar/day-count accrual, source identity, offline replay and shared ledger
+integration. Rates in these tests are synthetic, not historical SOFR fixtures.

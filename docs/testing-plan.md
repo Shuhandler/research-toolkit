@@ -175,3 +175,16 @@ positions/cash/debt/receivables and attribution from events, checks trade-cost l
 and turnover, perturbs future marks, and tests pre/post-purchase margin stops and
 partial reports. Disabled/no-dividend behavior preserves existing financial tables.
 The saved five-asset example also reconciles; plotting remains optional and offline.
+
+## Historical SOFR checks — implemented
+
+`test_sofr.py` uses offline synthetic rates and Decimal loan oracles: ACT/360
+spread accrual, calendar-day capitalization, publication lag, explicit holiday
+carry, DST cutoff conversion, equality at the publication cutoff, separate cash
+day count, and constant-curve equality with existing ACT/365F financing. Perturbing
+future published rates cannot change prior rows. Missing expected fixings, missing
+seed history, stale observations, bad coverage/schema/units/currency/vintage,
+nonfinite/negative inputs and mutated snapshots raise. Scheduled deleveraging,
+dividend reinvestment and stops retain shared accounting. Each accrual is matched
+to actual cost/events and balance-sheet reconciliation. Embedded source metadata
+reconstructs an identical input identity and replay. No tests download rates.

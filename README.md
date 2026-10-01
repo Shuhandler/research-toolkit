@@ -110,6 +110,28 @@ broker DRIP fill model. `result.dividend_reinvestments` links each paid dividend
 to its trade or other disposition. See the [full contract](docs/api.md#automatic-dividend-reinvestment)
 and the [runnable comparison](examples/dividend_reinvestment.py).
 
+## Historical SOFR financing
+
+Pass `rt.SOFRFinancing(...)` as the `financing` argument to either simulator.
+It accepts saved annual-decimal SOFR observations plus a supplied publication
+calendar, adds an explicit borrowing spread, and supports ACT/360 or ACT/365F.
+Rates become eligible only once published; each accrual date uses the latest rate
+known at midnight in New York. Holiday carry is explicit and age-limited; missing
+expected observations raise. Cash interest remains a separately configured fixed
+rate and day count. Existing `rt.Financing` calls retain fixed-rate behavior.
+
+`result.financing_accruals` records the rate, publication timestamp, opening
+balances and interest for every processed calendar date, including weekends and
+zero-debt dates. Rate data, source metadata and identity are retained for replay.
+See [the complete contract](docs/api.md#historical-sofr-financing) and the
+[runnable offline example](examples/historical_sofr.py). Its rates are deliberately
+synthetic; replace them with permitted, verified historical inputs for research.
+The library does not fetch rates or reconstruct publication vintages automatically.
+
+This model capitalizes interest daily, including weekends. It does not reproduce
+the official SOFR Index, retrospective overnight fixings, or a broker's exact
+margin-loan billing rules.
+
 ## Local development
 
 Python 3.12+ is the target. From this checkout:

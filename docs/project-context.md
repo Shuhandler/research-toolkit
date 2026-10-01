@@ -25,7 +25,8 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Implement milestone 1C | Subsequent user request |
 | Implement milestone 1D, including reports, plots and offline acceptance notebook | Prior user request |
 | Implement milestone 2 | Prior user request |
-| Implement realistic automatic dividend reinvestment after payment | Latest user request |
+| Implement realistic automatic dividend reinvestment after payment | Prior user request |
+| Implement historical daily SOFR financing (interpreting “SOFT” as SOFR) | Latest user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -57,7 +58,8 @@ These are explicit, revisable design choices, not additional user confirmations:
   default, cash repays debt and any excess remains cash. The implemented opt-in
   reinvestment policy can instead reserve paid principal for same-asset purchases;
   the caller explicitly chooses funding priority.
-- Fixed nominal financing rates with actual elapsed days/365; configurable
+- Fixed nominal financing rates with actual elapsed days/365, or optional
+  historical SOFR-plus-spread borrowing with explicit availability/day count; configurable
   research margin threshold with stop-on-breach. This is not a broker margin model.
 - Strict date alignment by default. Explicit supplied session calendars and source
   metadata. Matplotlib figures initially; interactive plots are a later option.
@@ -152,3 +154,31 @@ API, not additional user confirmations:
 - Per-payment records link cash receipt, earmarked debt repayment, released cash,
   purchases, fees and status. Pre/post-trade margin checks and all reconciliations
   apply. Analytical `reinvest_ex_close` returns remain a separate convention.
+
+## Historical SOFR extension — implemented
+
+The user requested a historical daily SOFR financing option. `SOFRFinancing` works
+with both simulators and dividend reinvestment; fixed-rate financing is preserved.
+Engineering choices exposed/documented by the implementation (not extra user
+confirmations):
+
+- USD borrowing uses a supplied SOFR table plus a nonnegative spread in bps.
+  Cash earns a separately configured fixed rate. Both day counts are explicit;
+  the new mode supports ACT/360 and ACT/365F.
+- The only initial timing policy is `known_at_accrual_start`: choose the latest
+  supplied rate available by 00:00 America/New_York on the posted accrual date.
+  This intentionally lags observations. Never select on observation date alone.
+- Require a separate complete publication calendar with matching rate keys,
+  declared calendar coverage and an explicit maximum observation age. Missing
+  rows, stale rates, missing initial history and ambiguous units raise.
+- Existing calendar-day balance/event order and daily capitalization apply,
+  including weekends. This is a configurable research loan convention, not the
+  official SOFR Index, retrospective in-arrears fixing or broker billing engine.
+- Save all source rate/calendar rows, metadata and their deterministic identity in
+  run metadata; a new accrual table ties selected rates/balances to posted interest.
+  The example uses synthetic rates; no live provider or historical rate download
+  is built into the library. Real inputs need verified point-in-time vintages.
+
+Possible follow-ups are source adapters, vintage reconstruction, SOFR-linked cash,
+signed rates/spreads, and other loan compounding/billing conventions. They are not
+implicitly supported by this release.
