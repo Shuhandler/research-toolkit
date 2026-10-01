@@ -1,14 +1,15 @@
-# Implemented API: milestones 1A–1C
+# Implemented API: milestones 1A–1D
 
-Use `import research_toolkit as rt`. The five implemented functions are
-`prepare_market_data`, `returns`, `cumulative_returns`, `equal_weights`, and
-`buy_and_hold`. Result and configuration objects are concrete dataclasses; their
-tables are Polars DataFrames. See the runnable
-[offline example](../examples/unlevered_buy_and_hold.py) for complete inputs.
+Use `import research_toolkit as rt`. Core functions are `prepare_market_data`,
+`returns`, `cumulative_returns`, `equal_weights`, `buy_and_hold`, `performance`,
+`correlation`, `save_snapshot`, and `load_snapshot`, with optional `rt.plots` views.
+Result/configuration objects are concrete dataclasses; their tables are Polars
+DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
+for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Short positions, scheduled trading, performance ratios,
-benchmark comparisons, and plotting are **not implemented**. The larger API in
-[architecture](architecture.md) remains a design proposal where explicitly labeled.
+Short positions, scheduled trading, inverse-volatility allocation, rolling risk,
+provider adapters, and chronological model research remain unimplemented. Future
+extensions in [architecture](architecture.md) are labeled separately.
 
 ## Validate market data
 
@@ -70,7 +71,7 @@ The returned `MarketData` has owned table copies, copied metadata, a `diagnostic
 table (`code`, `table`, `count`), and `snapshot_id`. Rows are canonically sorted and
 sorting is reported. The SHA-256 snapshot identity covers normalized table schemas,
 values, and metadata; it is invariant to input row order. Source metadata changes
-change the identity. Snapshot file persistence is deferred to 1D.
+change the identity. Snapshot persistence is implemented below.
 
 Polars tables and dictionaries remain mutable even inside frozen dataclasses.
 Consumers revalidate `MarketData` and reject changes that no longer match its
@@ -205,7 +206,7 @@ equity weights are null. The signed compounded return still reconciles to ending
 equity/initial capital minus one. Completed results have null stop fields.
 `require_complete()` returns the result when complete and raises `ValueError`
 otherwise. Call it before full-period comparisons. Partial analysis must explicitly
-show actual coverage and the stop reason. Full performance reports remain for 1D.
+show actual coverage and the stop reason. Full performance reports are implemented below.
 
 ## Shared allocation and accounting rules
 
@@ -280,9 +281,176 @@ externally alongside saved outputs if needed for development-run reproduction.
 
 Daily drawdown uses a peak starting at original capital. The post-entry loss is
 visible in `valuations` even if it recovers before the first interval close;
-full drawdown reporting over all valuations belongs to 1D. Numerical overflow,
+`performance()` includes all these valuations when reporting maximum drawdown. Numerical overflow,
 invalid input/funding, or failed reconciliations raise; they are not disguised as
 ordinary margin stops. Stopped runs preserve real finite negative/zero equity.
 
-Runtime dependency: Polars only. No plotting, provider, ML, annualization, or
-benchmark code is imported or invoked. All tests and the example run offline.
+Required runtime dependency: Polars only. Simulation invokes no plotting, provider,
+ML, annualization, or benchmark code. Reports and optional plots are separate calls.
+All tests and examples run offline.
+
+## Performance reports — milestone 1D
+
+```python
+report = rt.performance(
+    result,
+    periods_per_year=252,  # Required assumption; never inferred from data/calendar.
+    risk_free_annual_effective=0.03,
+    minimum_acceptable_return_annual_effective=0.0,
+    benchmark=benchmark_returns,  # Optional Polars table, schema below.
+    benchmark_metadata={
+        "source": "saved benchmark source", "basis": "total return; reinvested; no costs",
+        "currency": "USD", "frequency": "1d", "snapshot_id": benchmark_snapshot_id,
+    },
+    alignment="strict", allow_partial=False,
+)
+```
+
+`result` is a `BacktestResult`. Its daily arithmetic and valuation coverage are
+validated before reporting; inputs are not mutated. `periods_per_year` must be
+positive and finite. Effective annual risk-free and MAR rates must be finite and
+strictly greater than −1. Each converts via `expm1(log1p(annual)/periods_per_year)`.
+These metric rates are separate from nominal calendar-day financing rates.
+
+Benchmark schema is **exactly** `period_start: Date`, `session: Date`,
+`simple_return: Float64`. Rows may arrive out of order; keys are sorted and both
+interval endpoints must match the portfolio exactly. Nulls, duplicates, nonfinite
+values, missing/extra intervals, returns ≤ −1, currency/frequency mismatches, and
+unsupported alignment modes raise. There is no silent intersection. A supplied
+benchmark requires nonblank `source`, `basis`, `currency`, and `frequency` strings
+in `benchmark_metadata`; additional provenance is preserved. Benchmark equity starts
+at portfolio initial capital and compounds benchmark returns without inserting
+portfolio costs. With no benchmark, comparison/benchmark-series tables are typed empty.
+
+A complete-period report calls `result.require_complete()`. For a stopped run,
+`allow_partial=True` is mandatory; metadata retains actual/requested dates, stop
+reason and status. An optional partial benchmark must be explicitly sliced by the
+caller to those exact intervals. Plots display partial status and stop reason.
+No metric annualizes a stopped result into a fabricated full-period total return.
+The retained last simple return/drawdown may be below −100%; it is never clipped.
+
+### `PerformanceResult`
+
+| Table | Columns and meaning |
+| --- | --- |
+| `summary` | `metric: String`, `value: Float64` (nullable), `unit: String`, `n_obs: Int64`, `status: String` |
+| `benchmark_comparison` | Same schema; strict common-sample comparisons |
+| `benchmark_series` | `session: Date`, `equity: Float64`; entry capital plus each compounded benchmark close |
+| `daily` | Owned copy of the validated daily ledger, including P&L, simple returns and distinct cumulative columns |
+| `equity` | `session: Date`, `phase: String`, `equity: Float64`; ordered pre-entry, post-entry, then closes |
+| `drawdowns` | `equity` columns plus `drawdown: Float64`; running peak includes both entry valuations |
+| `allocation` | `session: Date`, `component: String`, `weight: Float64`; asset components prefixed `asset:`, plus `account:cash`, `account:debt` (negative) and `account:dividend_receivable` |
+| `attribution` | `component: String`, `pnl: Float64`; summed ledger dollar contributions over actual coverage |
+
+Position/allocation weights use net equity, not gross risky value, and are null at
+nonpositive equity. Pre-entry is excluded from allocation; post-entry account
+balances and held positions are included. Positive-equity weights sum to one even
+for leveraged portfolios. Dollar attribution is realized ledger attribution, not
+covariance risk contributions. Result tables/dictionaries remain mutable: treat
+reports as immutable inputs to plots, and create a new report after changing a run.
+
+Summary metrics: `ending_equity`, `cumulative_pnl` (declared currency),
+`cumulative_simple_return`, `compounded_return`, `max_drawdown` (fractions),
+`annualized_arithmetic_mean` (fraction/year), `annualized_volatility`
+(fraction/sqrt(year)), `sharpe`, `sortino` (ratios). `n_obs` always counts daily
+holding intervals; drawdown additionally examines the two entry valuations.
+Volatility uses sample standard deviation (`ddof=1`). Sharpe uses periodic excess
+returns; Sortino uses the root-mean-square negative MAR shortfall over **all**
+observations, not only losing observations. Ratios use square-root annualization.
+This is a sampling assumption, not a correction for serial correlation. CAGR and
+drawdown durations are not implemented.
+
+Benchmark metrics: `return_correlation` (Pearson), `beta` (intercept regression
+slope of portfolio on benchmark), `benchmark_compounded_return` (fraction),
+`compounded_return_difference` (**percentage points**, multiplied by 100), and
+`relative_wealth_return` (fraction). No implicit risk-free subtraction for beta.
+
+Volatility and ratios require at least two observations. Undefined results have
+null values with `insufficient_samples`, `zero_volatility`,
+`zero_downside_risk`, or `zero_benchmark_variance`; finite zero volatility itself
+is a valid reported zero. Invalid data raises. An empty backtest is invalid because
+simulation requires a holding interval. Neither status codes nor calculations
+produce narrative investment conclusions.
+
+Metadata includes original run assumptions/identities and status, annualization,
+effective annual/converted periodic hurdles, `ddof`, Sortino denominator, benchmark
+provenance, actual sample size, alignment, partial-report opt-in, and drawdown basis.
+
+## Asset correlations
+
+```python
+price_returns = rt.returns(market, method="simple", basis="price")
+correlations = rt.correlation(price_returns)
+```
+
+`correlation(ReturnResult) -> CorrelationResult` validates a complete common daily
+panel using the same interval contract as cumulative returns. It requires simple
+returns and excludes only the structural leading null per asset. A single input
+session produces null correlations with `empty_sample`; one interval produces
+`insufficient_samples`; a constant member produces `zero_volatility`.
+
+`values` has `asset: String`, `other_asset: String`, `correlation: Float64` (nullable),
+`n_obs: Int64`, `status: String`, with all ordered pairs. Metadata and diagnostics
+preserve return basis/source, assets, sessions and snapshot identity. Raw price
+returns retain split discontinuities and are **not** total returns. The acceptance
+notebook constructs explicit single-asset ledger return panels instead, including
+splits and dividends held in cash; it labels their distinct basis.
+
+## Local snapshot persistence
+
+```python
+rt.save_snapshot(market, "data/local/study-v1")  # Must be a NEW directory.
+market = rt.load_snapshot("data/local/study-v1")
+```
+
+`save_snapshot(MarketData, path) -> pathlib.Path` revalidates input identity and
+writes `prices.parquet`, `sessions.parquet`, `splits.parquet`, `dividends.parquet`,
+and `manifest.json`. Polars handles Parquet directly; no PyArrow dependency.
+The manifest records `format_version=1`, canonical `snapshot_id`, complete source
+metadata, original preparation diagnostics, and each file's SHA-256, row count and
+schema. Include transformations and usage/redistribution restrictions in source
+metadata. No existing path is overwritten. A failed write removes only the newly
+created snapshot directory; use a single writer per destination.
+
+`load_snapshot(path) -> MarketData` checks all file hashes, schemas and row counts,
+revalidates the financial contracts, and matches canonical identity. It never
+fetches data. The reconstructed diagnostics describe loading the saved canonical
+order; original preparation diagnostics remain in the manifest. Canonical identity
+is independent of Parquet byte encoding. File hashes detect accidental corruption;
+they are not signatures authenticating an external source. The canonical snapshot
+identity is stored in simulation metadata. A separate benchmark snapshot carries
+its own identity. Run parameters and environment/revision provenance belong in the
+notebook/report, not in market-data files.
+
+## Optional Matplotlib plots
+
+Install `.[plot]` (or `.[notebook]`) from this checkout. `import research_toolkit as rt`
+still imports no Matplotlib, NumPy, pandas, network client or ML framework.
+Matplotlib loads only when a plotting function is called.
+
+```python
+fig, ax = rt.plots.equity(report)
+ax.set_title("My study")
+fig.savefig("artifacts/equity.png", dpi=150)
+```
+
+- `prices(market, *, ax=None)`: supplied, **unnormalized** prices, labeled adjustment
+  basis and currency, with split-date markers. No hidden rebasing calculation.
+- `pnl(report, *, ax=None)`, `returns(report, *, ax=None)`: daily net dollar P&L and
+  net simple returns, respectively.
+- `equity(report, *, ax=None)`: prepared equity with pre/post-entry valuations and
+  optional precomputed benchmark on the same initial capital.
+- `drawdown(report, *, ax=None)`: prepared entry-aware drawdown.
+- `distribution(report, *, bins=30, ax=None)`: histogram of supplied daily returns;
+  binning is display-only, with no new performance calculation.
+- `allocation(report, *, ax=None)`: drifting net-equity weights, including cash,
+  receivables and negative debt weights.
+- `attribution(report, *, ax=None)`: prepared cumulative dollar contributions.
+- `correlation(correlations, *, ax=None)`: prepared asset-return heatmap; undefined
+  values remain blank. The title carries basis, coverage and sample size.
+
+Every function returns `(Figure, Axes)`, supports an existing axis, and never calls
+`show()`, changes global styles, fetches inputs or reruns the simulator/metrics.
+Portfolio plots label actual coverage and stopped status/reason. Percentage axes
+format stored fractions without changing data. Cash/loan attribution remains
+separate from asset price P&L. Rolling risk and interactive backends remain later work.

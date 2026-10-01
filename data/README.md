@@ -6,7 +6,13 @@ source, retrieval time, adjustment basis, asset identifiers/currency, calendar a
 timezone, coverage, checksums, transformations, and redistribution restrictions.
 Never overwrite an immutable snapshot in place. Never store credentials here.
 
-Small synthetic test fixtures belong in `tests/fixtures/` when tests are added.
-Public example data may be committed only after checking redistribution rights.
-CSV plus JSON is sufficient for tiny fixtures; add Parquet support when its first
-consumer exists. See [the data contract](../docs/architecture.md).
+Tiny synthetic test inputs are built in `tests/conftest.py`; the one-year
+acceptance fixtures live in `examples/snapshots/v1`. Public example data may be
+committed only after checking redistribution rights. Parquet preserves exact
+types for saved market tables. See [the data contract](../docs/architecture.md).
+
+Implemented snapshot I/O is `rt.save_snapshot(market, new_directory)` and
+`rt.load_snapshot(directory)`: typed Parquet files plus a versioned JSON manifest
+with SHA-256 file hashes and canonical input identity. See [the API](../docs/api.md).
+Self-authored, small acceptance fixtures are committed under `examples/snapshots/v1`;
+real/private research inputs still belong in ignored `data/local/`.

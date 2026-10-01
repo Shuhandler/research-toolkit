@@ -1,46 +1,80 @@
-# Examples
+# Examples and acceptance replay
 
-[unlevered_buy_and_hold.py](unlevered_buy_and_hold.py) is a runnable offline 1A/1B
-example with synthetic prices, a split, a dividend, entry costs, and numerical
-reconciliation outputs. After installing this checkout, run
-`python examples/unlevered_buy_and_hold.py` from the repository root. It does not
-download data or imply market-data performance conclusions.
+`unlevered_buy_and_hold.py` is the small 1A/1B hand-checkable example;
+`financed_buy_and_hold.py` adds 1×/2× comparisons and a separate margin-stop case.
+Both run offline after installing the checkout.
 
-[financed_buy_and_hold.py](financed_buy_and_hold.py) reuses the same synthetic
-snapshot for 1×/2× financed comparisons and a separate price-shock scenario that
-stops on margin breach. Run `python examples/financed_buy_and_hold.py` from the
-repository root. It shows `require_complete()` for complete comparisons and
-explicitly labels the stopped scenario's requested/actual coverage.
+[buy_and_hold_equities.ipynb](buy_and_hold_equities.ipynb) is the completed milestone
+1 acceptance notebook. Five synthetic equity holdings start at $100 million and
+run from 2024-01-02 through 2025-01-02: 263 session observations and 262 holding
+intervals. The fixture uses **every weekday**, including real exchange holidays,
+at 21:00 UTC; it is deliberately not represented as an exchange calendar. Explicit
+252-period annualization is an example assumption, not inferred from row count.
 
-## Acceptance notebook specification — not implemented
+The notebook loads [saved snapshots](snapshots/v1), displays provenance/actions,
+configures weights, entry costs and financing, runs 1×/1.5×/2× ledgers, checks
+balances/attribution, and reports daily P&L/returns, cumulative sum versus compounding,
+benchmark correlation/beta, drawdown and risk ratios. A benchmark snapshot supplies
+a hypothetical reinvested total-return index without costs; portfolio dividends
+remain in cash/receivables or repay debt. Stopped scenarios are excluded from full
+comparisons and receive explicit partial reporting. The default scenarios complete.
 
-Create `buy_and_hold_equities.ipynb` during milestone 1D, after the tested library
-exists. Notebook cells should configure inputs, call the library, inspect tables,
-plot results, then explain observed findings in separate Markdown cells.
+Nine plots show raw prices with split markers, P&L, simple returns, equity,
+drawdown, distribution, drifting allocation, dollar attribution, and correlations.
+Asset correlations use separately simulated, zero-cost, zero-interest single-asset
+portfolios with dividends held in cash. They do not use split-discontinuous raw
+price returns. The final Markdown observations were written after inspecting the
+actual default tables and rendered plots; rewrite them when changing inputs.
 
-1. Load a versioned local snapshot for five stocks and a benchmark. Show data
-   provenance, dates, price/return basis, calendar, missing-data report, and actions.
-   Provide an offline synthetic example if real data cannot be redistributed.
-2. Set starting equity to $100,000,000 and choose equal or explicit weights,
-   entry/end sessions spanning one calendar year, entry cost assumptions, financing
-   rates, and margin policy. Include the entry valuation and all subsequent expected
-   sessions; do not equate a year mechanically with exactly 252 observations.
-3. Run the unlevered case and optionally one or more financed initial-leverage
-   cases on identical inputs. Show all resolved assumptions, drift in leverage,
-   financing totals, and completion status. Never multiply an unlevered return
-   series to manufacture a leveraged backtest.
-4. Inspect trades, positions, dividend receivables, cash, debt, costs, and daily
-   P&L. Show reconciliation residuals, not just a final performance number.
-5. Report daily dollar P&L, daily simple returns, cumulative simple-return sum,
-   compounded return, cumulative dollar P&L, ending equity, correlation, beta,
-   volatility, drawdown, Sharpe, and Sortino, with units and sample counts.
-6. Plot normalized raw prices (mark splits), daily P&L/returns, net equity against a
-   normalized benchmark, drawdowns, return distributions, and drifting allocation.
-   Clearly separate cumulative sums from compounded returns. Add asset-return
-   correlation and dollar attribution views once their calculations are implemented.
-7. Interpret actual outputs and limitations in Markdown, including benchmark
-   basis, modeled costs, dividend handling, and the lack of terminal liquidation.
+## Run
 
-Re-running from the same saved inputs must require no network and reproduce the
-same numerical tables within declared tolerances. No tickers, dates, five-asset
-assumption, or $100 million constant belongs in library code.
+From the repository root, using Python 3.12+:
+
+```sh
+python -m pip install -e '.[test,notebook]'
+python -m pytest -q
+python examples/run_acceptance.py
+```
+
+Or open the source notebook with a Jupyter interface using the same installed
+environment. The headless runner launches this Python as the local kernel;
+localhost sockets are required for Jupyter, but data acquisition is blocked inside
+the notebook. No Internet access or credentials are needed for execution after
+installation. The optional notebook extra includes the execution kernel/tools,
+not a JupyterLab user interface.
+
+Generated output goes to ignored `artifacts/acceptance/`: an executed notebook,
+nine PNG figures, daily CSV, exact environment versions, and Git revision/status
+provenance. The committed source notebook stays clean. To reproduce the exact
+CPython 3.14.6/macOS arm64 acceptance environment in a fresh virtual environment:
+
+```sh
+python -m pip install -r examples/requirements-acceptance.txt
+python -m pip install --no-deps --no-build-isolation -e .
+python examples/run_acceptance.py
+```
+
+Consumer dependencies remain ranged. Compatibility tests also cover Python 3.12.11,
+Polars 1.30.0 and Matplotlib 3.9.0, including notebook execution. These checks are
+not a guarantee for every operating system or future dependency version.
+
+## Fixture provenance and regeneration
+
+`snapshots/v1/equities` and `snapshots/v1/benchmark` contain self-authored, small
+synthetic Parquet tables and manifests with SHA-256 hashes and canonical identities.
+No reference-project code or third-party market data was copied. The fixture has
+no third-party data redistribution restrictions; the repository's own license
+remains undecided. All rates, prices, calendars and costs are modeling assumptions.
+
+`make_acceptance_snapshot.py` records the deterministic generation method. To
+inspect a fresh generation without replacing the canonical saved inputs:
+
+```sh
+python examples/make_acceptance_snapshot.py artifacts/new-synthetic-snapshot
+```
+
+The destination must not exist. Canonical replay uses saved bytes, because last-bit
+libm rounding during generation can vary across platforms. Never replace these
+fixtures with credentials, private data, or licensed data without reviewing its
+redistribution terms. Real-data research requires its own supplied calendar,
+source/action coverage and clearly identified benchmark convention.

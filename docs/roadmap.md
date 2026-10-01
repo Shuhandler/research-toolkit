@@ -1,14 +1,15 @@
 # Implementation roadmap
 
-Milestones 1A–1C are implemented and tested; 1D and later phases remain
-unimplemented. See [the API](api.md) and the runnable offline example. The first
-release is not complete until the financed, corporate-action-aware acceptance
-workflow passes.
+Milestones 1A–1D are implemented and tested. The offline synthetic acceptance
+notebook passes the complete financed, corporate-action-aware workflow. This is a
+research release; real-data selection/licensing remains a separate user decision.
+See [the API](api.md) and [examples](../examples/README.md).
 
 ## Milestone 1 — daily equity buy-and-hold with financing
 
 Current validation covers Python 3.12.11/Polars 1.30.0 and Python 3.14.6/Polars
-1.44.2, including editable installation and the offline synthetic example.
+1.44.2, including editable installation, optional plotting, and the offline acceptance notebook.
+The minimum Matplotlib 3.9.0 is checked with Python 3.12; current 3.11.2 with Python 3.14.
 
 Limit scope to one currency/calendar, fractional long shares, equal/custom initial
 weights, raw closes, ordinary splits/cash dividends, proportional entry costs,
@@ -59,7 +60,7 @@ This is an internal slice, not completion of the user's first milestone.
 return series. Financing charges and debt changes are separately inspectable.
 No successful full-period report can conceal a stopped run.
 
-### 1D. Performance, plots, and acceptance notebook — next
+### 1D. Performance, plots, and acceptance notebook — implemented
 
 - Add performance tables for P&L/returns, drawdowns, volatility, Sharpe, Sortino,
   return correlation and beta; record units, annualization, sample counts, and

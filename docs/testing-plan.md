@@ -1,11 +1,12 @@
 # Testing plan and implemented checks
 
 Prioritize independent financial examples and ledger identities over coverage
-percentages or tests that mirror implementation. Milestone 1A–1C tests now cover
+percentages or tests that mirror implementation. Milestone 1A–1D tests now cover
 data validation, return arithmetic, entry costs, actions, cash interest, drift,
 scaling, leverage, financing, debt repayment, stopped runs, and accounting identities
-using synthetic Polars tables and independent expected values. Metric, plotting, and research tests below remain
-targets for their later phases. Run `python -m pytest -q`; network connections are
+using synthetic Polars tables and independent expected values. Performance,
+benchmark, snapshot and plotting checks are implemented; chronological research
+checks remain targets for later phases. Run `python -m pytest -q`; network connections are
 blocked by the unit-test fixture.
 
 ## Hand-checkable oracles
@@ -100,3 +101,33 @@ Separate network/provider integration checks from unit tests, opt in explicitly,
 and never require credentials in CI. Check any redistributed fixture's license.
 Run relevant checks after each slice; add broader checks when a new interaction
 justifies them. Update this plan and runnable examples when contracts change.
+
+## Implemented milestone 1D checks
+
+The suite now includes independent +10%/−10% P&L and benchmark beta oracles,
+effective-rate conversion, Sortino's all-observation denominator, entry loss
+recovered before the first closing return, flat/short samples, zero benchmark
+variance, invalid conventions, edited ledger rejection, and explicit stopped-run
+opt-in. Benchmark date reordering is harmless; missing/duplicate/changed endpoints,
+nulls and nonfinite values fail. Correlations preserve the basis and structural-null
+contract rather than silently deleting data.
+
+Snapshot tests verify immutable destinations, exact typed round trips, identical
+replayed numerical ledgers, file corruption, and altered manifest identity/schema.
+Plot tests run headlessly with optional Matplotlib, inspect plotted dates and
+numbers, preserve caller axes, check partial labels and negative-equity visibility,
+and save every view. A fresh process verifies core import does not load the optional
+plotting/NumPy/ML/network stack.
+
+The committed year-long synthetic inputs drive four end-to-end cases (all cash,
+1×, 1.5×, 2×). Independent exported-record checks reconstruct market values, balance
+sheets, daily dollar attribution, cumulative P&L and complete allocation weights;
+entry fees occur only on trades, and unpaid final dividends remain receivables.
+The notebook is executed with network acquisition blocked and plots inspected
+visually. Its qualitative discussion is manually written Markdown.
+
+Validation environments: Python 3.14.6 / Polars 1.44.2 / Matplotlib 3.11.2 and Python
+3.12.11 / Polars 1.30.0 / Matplotlib 3.9.0. Both install the checkout and run the full
+suite and notebook. The source notebook stays output-free; the runner writes an
+executed artifact with figures and environment/revision provenance. Exact current
+acceptance dependencies are pinned separately from consumer requirements.

@@ -15,6 +15,14 @@ schemas, provenance, sessions, and portfolio policies.
   dividend repayment, 1× equivalence, leverage drift, margin/insolvency stops,
   coverage guards, and financed multi-asset reconstruction at $100 million.
 
-Performance ratios, plots, and research workflow checks will be added
-with their implementations; see [the testing plan](../docs/testing-plan.md).
-The future five-stock notebook complements, but does not replace, accounting tests.
+- `test_metrics.py`: hand-calculated metrics, benchmark alignment, null reasons,
+  corporate-action-aware entry drawdown, stopped reports and asset correlations.
+- `test_snapshots.py`: replay, immutable writes, hash/schema/identity corruption.
+- `test_plots.py`: lazy optional imports, plotted values/dates, reusable axes,
+  stopped labels and rendering; plotting tests skip when the extra is absent.
+- `test_acceptance.py`: saved one-year inputs, five holdings, $100 million,
+  all-cash/financed cases and independent balance/attribution reconstruction.
+
+Install `.[test,plot]` to run every unit/integration test. The acceptance notebook
+complements these checks; run `python examples/run_acceptance.py` with the notebook
+extra to render it and inspect the figures. See [the testing plan](../docs/testing-plan.md).

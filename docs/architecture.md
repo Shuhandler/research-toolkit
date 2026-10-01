@@ -1,9 +1,9 @@
 # Architecture and extension proposal
 
-Milestones 1A–1C implement the data, return, allocation, cost, financing, result,
-and account ledger modules below. [The implemented API](api.md) is authoritative for
+Milestones 1A–1D implement data, returns, allocation, costs, financing, the ledger,
+performance, local snapshots, and optional plotting. [The implemented API](api.md) is authoritative for
 current signatures and schemas. This document also retains later design targets;
-the full financed/performance/plotting example remains unimplemented. Add each
+the full financed/performance/plotting acceptance notebook is implemented. Add each
 future module only with working, tested behavior, without stub hierarchies.
 
 ## Boundaries and dependencies
@@ -18,6 +18,7 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_financing.py` | Explicit cash/loan rates, day count, sweep and margin configuration | 1C |
 | `_backtest.py` | Ordered events, quantities, cash, receivables, debt, reconciliation | 1B–1C |
+| `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
 | `_metrics.py` | Performance tables, benchmark comparisons, rolling calculations | 1D onward |
 | `plots.py` | Public plotting namespace consuming prepared numerical results | 1D onward |
 | `_allocation.py` | Inverse-volatility and later constrained allocations | 2 |
@@ -85,7 +86,8 @@ and retrieval timestamp (UTC), source identifiers, asset/currency mapping, price
 adjustment semantics, action coverage, timezone, session calendar provenance,
 requested/actual coverage, missing-data diagnostics, transformations, file SHA-256
 hashes, and usage/redistribution restrictions. Keep original and transformed data
-separately. Store the manifest hash in the run result.
+separately. Store the canonical data identity in the run result; per-file hashes and the
+manifest remain in the snapshot directory.
 
 A run stores resolved policy/cost/rate settings, code version or revision, dirty-tree
 status where available, environment versions, input hashes, and start/end coverage.
@@ -121,11 +123,11 @@ Implemented `BacktestResult` contains the tables below plus a per-action
 return. The first interval includes entry costs; pre/post-entry valuations remain
 visible separately. See [timing conventions](financial-conventions.md).
 
-Proposed `PerformanceResult` contains `summary` (`metric`, `value`, `unit`,
+Implemented `PerformanceResult` contains `summary` (`metric`, `value`, `unit`,
 `n_obs`, `status`), `benchmark_comparison`, `benchmark_series`, `drawdowns`, and metadata for frequency,
 annualization, sample window, risk-free convention, and return basis. Undefined
 metrics are null with a reason code. Invalid inputs raise; they do not become null
-metrics. Later rolling-risk and correlation tables use this same convention.
+metrics. `CorrelationResult` uses the same null/status convention; rolling risk remains later work.
 Status codes are diagnostics, not strategy recommendations.
 
 Results carry `complete` or `stopped` status and stop reason/session/time. The
@@ -134,12 +136,12 @@ failure close is retained, with requested and actual coverage in metadata.
 unless an explicitly requested partial report labels coverage and stop reason.
 Numerical failures still raise. Portfolio inputs are not mutated.
 
-## Illustrative public API — unimplemented, do not run
+## Public workflow — implemented, supply your input tables and configuration
 
 The first five facade operations `prepare_market_data`, `returns`,
 `cumulative_returns`, `equal_weights`, and `buy_and_hold` are implemented.
-`Financing` is implemented. `performance` and the plotting namespace remain
-proposed. The full target workflow below uses a few
+`Financing`, `performance`, `correlation`, snapshots and the plotting namespace are
+implemented. The workflow below uses a few
 concrete policy/result types and the `plots` namespace. Avoid exporting internal
 helpers. Keyword-only policy arguments should carry meaningful names and units.
 
@@ -174,7 +176,8 @@ result = rt.buy_and_hold(
     ),
 )
 report = rt.performance(
-    result, benchmark=benchmark_returns, alignment="strict",
+    result, benchmark=benchmark_returns, benchmark_metadata=benchmark_metadata,
+    alignment="strict",
     periods_per_year=252, risk_free_annual_effective=0.0,
     minimum_acceptable_return_annual_effective=0.0,
 )
@@ -185,13 +188,14 @@ result.daily.select(
 report.summary
 report.benchmark_comparison  # Return correlation, beta, n_obs, status.
 benchmark_equity = report.benchmark_series.select("session", "equity")
-fig, ax = rt.plots.equity(result.daily, benchmark=benchmark_equity)
+fig, ax = rt.plots.equity(report)
 fig.savefig("artifacts/equity.png", dpi=150)
 ```
 
 All costs/rates must be supplied, including explicit zeros. The example's 252 and
 zero risk-free/MAR values are visible choices, not universal inferred settings.
-`benchmark_equity` is a precomputed table from the performance analysis. Repeat
+`benchmark_equity` is a precomputed table from performance; plots take the report
+to preserve its status, coverage and benchmark basis. Repeat
 the simulation with another `initial_gross_leverage` to compare financed cases;
 report the resulting debt and drift, not only scaled returns.
 
@@ -204,15 +208,15 @@ column; a log-return input is never silently interpreted as simple returns.
 
 ## Plotting and later extensions
 
-Matplotlib functions accept prepared tables plus an optional existing `ax`, return
+Matplotlib functions accept prepared reports/market data/correlations plus an optional `ax`, return
 `(Figure, Axes)` (or a documented axes array for multi-panel figures), and do not
 call `show()` or change global styles. Labels state dates, currency, percent versus
 decimal units, gross/net status, and return basis. No fetching or recomputing
 metrics in plotting; direct display normalization must be explicit.
 
-Planned views: price, returns, dollar P&L, equity, drawdown, distribution,
-correlation, rolling risk, allocation, and attribution. Add a view only after its
-underlying numerical result exists. Interactive backends can be optional later.
+Implemented views: price, returns, dollar P&L, equity, drawdown, distribution,
+correlation, allocation, and attribution. Rolling risk remains planned. Add a view
+only after its underlying numerical result exists. Interactive backends can be optional later.
 
 Future rebalancing consumes dated target weights and creates **quantity changes**
 through the same ledger; scheduled and signal policies do not replace accounting.

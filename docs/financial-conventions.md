@@ -1,9 +1,9 @@
 # Financial conventions
 
-Milestones 1A–1C implement the input/return conventions, account funding,
+Milestones 1A–1D implement the input/return conventions, account funding,
 entry costs, splits, dividends, cash/borrowing interest, debt repayment, and margin
-stops below. Performance ratios and later allocation methods remain proposed for their
-roadmap phases. See [the API](api.md) for the exact supported subset. User-confirmed
+stops, performance ratios and benchmark comparisons below. Later allocation
+methods, CAGR, drawdown durations and per-period risk-free curves remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
 

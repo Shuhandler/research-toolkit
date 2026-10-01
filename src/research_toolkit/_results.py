@@ -61,3 +61,27 @@ class BacktestResult:
         if self.status != "complete":
             raise ValueError(f"backtest {self.status} on {self.stop_session}: {self.stop_reason}")
         return self
+
+
+@dataclass(frozen=True)
+class PerformanceResult:
+    """Numerical metrics and prepared plot tables, retaining actual run coverage."""
+
+    summary: pl.DataFrame
+    benchmark_comparison: pl.DataFrame
+    benchmark_series: pl.DataFrame
+    daily: pl.DataFrame
+    equity: pl.DataFrame
+    drawdowns: pl.DataFrame
+    allocation: pl.DataFrame
+    attribution: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CorrelationResult:
+    """Common-sample asset return correlations with basis and null reasons."""
+
+    values: pl.DataFrame
+    metadata: dict[str, Any]
+    diagnostics: pl.DataFrame

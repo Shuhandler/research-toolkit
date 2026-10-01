@@ -4,10 +4,10 @@ A notebook-friendly Python library for quantitative trading research: prepare
 market data, construct portfolios, simulate trades, measure performance, and plot
 results through a small, consistent interface.
 
-**Status: milestones 1A–1C implemented.** Strict Polars input validation,
-return arithmetic, and a buy-and-hold ledger with borrowing and margin stops are
-available. Performance ratios, benchmark comparisons, plotting, and data adapters remain
-unimplemented. See the [implemented API](docs/api.md) for the supported contracts.
+**Status: milestone 1 complete (1A–1D).** Strict Polars inputs, a financed
+buy-and-hold ledger, performance and benchmark tables, optional Matplotlib plots,
+and replayable snapshots are implemented. The [acceptance notebook](examples/buy_and_hold_equities.ipynb)
+runs offline on clearly labeled synthetic data. See the [implemented API](docs/api.md).
 
 ## Purpose and scope
 
@@ -48,15 +48,28 @@ use `result.require_complete()` before treating a result as a full-period run.
 The [offline example](examples/unlevered_buy_and_hold.py) supplies a complete small
 synthetic portfolio with a split, dividend, and entry costs. All quantities and
 financial policies are explicit. The [financed example](examples/financed_buy_and_hold.py)
-compares 1× and 2× initial leverage and demonstrates a stopped run. The larger [architecture](docs/architecture.md)
-also contains planned APIs; `rt.performance` and `rt.plots` are not available yet.
+compares 1× and 2× initial leverage and demonstrates a stopped run.
 
-The acceptance notebook will use five stocks, $100 million starting equity, one
-year of daily observations, a benchmark, entry costs, and optional leverage
-comparisons. These are example parameters, never library constants. It must report
-daily dollar P&L, daily simple returns, the cumulative sum of simple returns,
-compounded return, ending equity, return correlation, and beta, with appropriate
-plots. Cumulative sums and compounded returns will have distinct labels.
+The [acceptance notebook](examples/buy_and_hold_equities.ipynb) uses five synthetic
+stocks, $100 million starting equity, one calendar year, entry costs, a benchmark,
+and 1×/1.5×/2× financed scenarios. It reports P&L, simple returns, their cumulative
+sum, compounded return, ending equity, return correlation/beta, risk metrics and
+nine chart types. These are example parameters, never library constants.
+
+```python
+report = rt.performance(
+    result, periods_per_year=252, risk_free_annual_effective=0.03,
+    minimum_acceptable_return_annual_effective=0.0,
+)
+report.summary
+fig, ax = rt.plots.equity(report)  # Optional plot extra.
+```
+
+Supply an optional strictly matched benchmark table and its source/basis metadata
+for comparisons. Reports reject stopped runs unless `allow_partial=True` is
+explicit, and plots label their actual coverage and stop reason. Save validated
+inputs with `rt.save_snapshot(market, new_directory)` and replay using
+`rt.load_snapshot(directory)`; loading verifies file hashes and input identity.
 
 ## Local development
 
@@ -65,19 +78,25 @@ Python 3.12+ is the target. From this checkout:
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[test]'
+python -m pip install -e '.[test,notebook]'
 python -m pytest -q
 python examples/unlevered_buy_and_hold.py
 python examples/financed_buy_and_hold.py
+python examples/run_acceptance.py
 ```
 
 Run the notebook kernel from that environment. The commands install the local
 checkout; do not install an unrelated package from an index by name. The build
 backend may need downloading. Polars is the only runtime dependency; pytest is an
-optional test dependency. Core calculations do not import a plotting or ML stack.
+optional test dependency. Use `.[plot]` for figures or `.[notebook]` to execute the
+notebook. Core imports do not load Matplotlib, NumPy, pandas, providers, or ML.
 Tests and the example use synthetic inputs and run offline. The implementation was
 validated on Python 3.14.6 with Polars 1.44.2 and Python 3.12.11 with the declared
-minimum Polars 1.30.0. A broader platform matrix remains a 1D release check.
+minimum Polars 1.30.0 and Matplotlib 3.9.0. The current environment uses Matplotlib
+3.11.2. Both execute the acceptance notebook. Exact replay dependencies are in
+[examples/requirements-acceptance.txt](examples/requirements-acceptance.txt).
+`run_acceptance.py` writes the executed notebook, PNG figures, daily CSV and
+environment/revision provenance under ignored `artifacts/acceptance/`.
 
 ## Repository guide
 
@@ -91,7 +110,7 @@ minimum Polars 1.30.0. A broader platform matrix remains a 1D release check.
 | [Roadmap](docs/roadmap.md) | Phases and first-release acceptance criteria |
 | [Testing plan](docs/testing-plan.md) | Hand calculations and reconciliation checks |
 | [Reference review](docs/reference-review.md) | Verified findings and license provenance |
-| [examples/](examples/README.md) | Runnable offline example and future acceptance notebook specification |
+| [examples/](examples/README.md) | Runnable offline examples, snapshots and acceptance notebook |
 | [tests/](tests/README.md) | Offline validation, return arithmetic, and ledger tests |
 | [data/](data/README.md) | Local snapshot policy; no downloaded data |
 | `src/research_toolkit/` | Small public facade backed by focused internal modules |

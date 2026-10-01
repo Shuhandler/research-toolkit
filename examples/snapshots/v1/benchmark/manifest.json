@@ -1,0 +1,66 @@
+{
+  "diagnostics": [],
+  "files": {
+    "dividends": {
+      "rows": 0,
+      "schema": {
+        "action_id": "String",
+        "asset": "String",
+        "cash_per_share": "Float64",
+        "ex_session": "Date",
+        "pay_date": "Date"
+      },
+      "sha256": "eb5680695687a10d09e43814eb0df9a19fd7abeca7d0cb973f92e5011781c667"
+    },
+    "prices": {
+      "rows": 263,
+      "schema": {
+        "asset": "String",
+        "close": "Float64",
+        "session": "Date"
+      },
+      "sha256": "5d70cb588704a56bc6d937226ae2bffd746ff0fef6f182e4d98cc3a2209e6575"
+    },
+    "sessions": {
+      "rows": 263,
+      "schema": {
+        "close_at": "Datetime(time_unit='us', time_zone='UTC')",
+        "session": "Date"
+      },
+      "sha256": "988b86cf06d81564c81782e970b0e6eed2eb9f4d21c8b20dff2fbaa9554a8816"
+    },
+    "splits": {
+      "rows": 0,
+      "schema": {
+        "action_id": "String",
+        "asset": "String",
+        "effective_session": "Date",
+        "ratio": "Float64"
+      },
+      "sha256": "cfbe53c15eb4bbc4b470b4870bab9e9170284ca028cb823cd1aa1ad5ccc330e8"
+    }
+  },
+  "format_version": 1,
+  "metadata": {
+    "actions_complete": true,
+    "asset_currencies": {
+      "SYNTH_INDEX": "USD"
+    },
+    "benchmark_basis": "synthetic total-return index; hypothetical reinvested distributions embedded, no trading costs",
+    "calendar": "synthetic_weekdays_not_an_exchange_calendar",
+    "calendar_note": "Every weekday, including real exchange holidays; 21:00 UTC close by assumption.",
+    "calendar_version": "1",
+    "coverage_end": "2025-01-02",
+    "coverage_start": "2024-01-02",
+    "currency": "USD",
+    "dividend_basis": "post_split_share",
+    "frequency": "1d",
+    "price_basis": "total_return_adjusted",
+    "retrieved_at": "2025-01-03T00:00:00Z",
+    "source": "self-authored synthetic acceptance fixture v1",
+    "timezone": "America/New_York",
+    "transformations": "Deterministic sinusoidal hypothetical returns; raw marks reduced for explicit actions.",
+    "usage": "Self-authored fixture; no third-party market-data restrictions. Project license undecided."
+  },
+  "snapshot_id": "92c88207f08f855f34f1971308ebbf134dfd8767e1bdb002af8b8fce47eb7de5"
+}

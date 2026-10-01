@@ -22,7 +22,8 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Borrowing and leverage included in the first milestone | User chose 3B |
 | Setup phase creates documentation and minimal scaffolding only; no financial functions | Initial request |
 | Implement milestones 1A and 1B; continue to defer 1C/1D | Follow-up user request after setup |
-| Implement milestone 1C; 1D remains next | Subsequent user request |
+| Implement milestone 1C | Subsequent user request |
+| Implement milestone 1D, including reports, plots and offline acceptance notebook | Latest user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -41,7 +42,8 @@ dates, benchmark, and leverage levels are notebook inputs, never library constan
 These are explicit, revisable design choices, not additional user confirmations:
 
 - Python 3.12+, `src/` package layout, setuptools build backend; Polars is now the
-  only runtime dependency, with pytest in the test extra.
+  only required runtime dependency, with pytest in the test extra and optional
+  Matplotlib/notebook extras.
 - Long-form Polars tables with explicit session/asset keys; no implicit index.
 - First release: single currency, fractional shares, long positions plus a cash
   loan, fixed initial allocation, ordinary splits and cash dividends. No external
@@ -71,14 +73,18 @@ These are explicit, revisable design choices, not additional user confirmations:
 
 ## Status and next step
 
-Milestones 1A–1C are implemented: strict metadata/calendar/price/action
+Milestones 1A–1D are implemented: strict metadata/calendar/price/action
 validation, deterministic input identities, simple/log and cumulative returns,
 equal/custom weights, and a fractional-share ledger with entry costs, splits,
 dividend receivables/payments, cash interest, borrowing, financing charges,
 debt repayment, margin/insolvency stops, and reconciliations.
-Offline unlevered/financed Python examples and financial tests are included. No reference
-code was reused, market data downloaded, notebook created, package published, or
-GitHub changes pushed.
+Performance/benchmark tables, optional Matplotlib plots, hashed local snapshot
+persistence, and the executed five-stock acceptance notebook are included. The
+self-authored fixture covers one calendar year of synthetic weekdays, with five
+raw equity series, splits/dividends and a separate hypothetical total-return index.
+It is not historical market data or an actual exchange calendar. The 1×/1.5×/2×
+scenarios complete and reconcile. No reference code was reused, market data
+downloaded, package published, or GitHub changes pushed.
 
 Concrete interface refinements: `returns` takes validated `MarketData` so session
 gaps cannot bypass checks. `buy_and_hold` accepts an explicit `Financing` object;
@@ -88,8 +94,13 @@ but mixing the two configurations raises. The named `cash_sweep` belongs to
 retain the failure close, reason/time, and requested versus actual coverage;
 `require_complete()` guards full-period consumers. Margin equality uses a relative
 1e-12 roundoff tolerance, separate from currency reconciliation tolerances.
-These are engineering refinements of the accepted design. `performance` and plotting
-are not implemented. See [the API](api.md).
+The 1D report requires explicit annualization, risk-free/MAR rates and benchmark
+metadata; strict alignment matches both endpoints. Reports require completion or
+explicit partial opt-in, and plots consume prepared result objects so coverage and
+stop reasons stay visible. Snapshot persistence uses Polars Parquet plus a versioned
+JSON manifest; the source data identity is distinct from file hashes. These are
+engineering refinements of the accepted design. See [the API](api.md).
 
-Next is milestone 1D: performance
-metrics, benchmarks, plots, snapshot persistence, and the full acceptance notebook.
+Next is milestone 2: pre-decision inverse-volatility allocation and scheduled
+rebalancing, preserving all existing trade, cost and financing reconciliations.
+Real-data research can also begin after choosing permitted sources and assumptions.
