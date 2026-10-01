@@ -1,4 +1,12 @@
-# Acceptance notebook specification — not implemented
+# Examples
+
+[unlevered_buy_and_hold.py](unlevered_buy_and_hold.py) is a runnable offline 1A/1B
+example with synthetic prices, a split, a dividend, entry costs, and numerical
+reconciliation outputs. After installing this checkout, run
+`python examples/unlevered_buy_and_hold.py` from the repository root. It does not
+download data or imply market-data performance conclusions.
+
+## Acceptance notebook specification — not implemented
 
 Create `buy_and_hold_equities.ipynb` during milestone 1D, after the tested library
 exists. Notebook cells should configure inputs, call the library, inspect tables,

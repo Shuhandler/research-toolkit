@@ -1,10 +1,14 @@
 # Implementation roadmap
 
-All phases below are unimplemented. Setup delivers documentation and packaging
-only. Implement small slices in order; the first release is not complete until
-the financed, corporate-action-aware acceptance workflow passes.
+Milestones 1A and 1B are implemented and tested; 1C and later phases remain
+unimplemented. See [the API](api.md) and the runnable offline example. The first
+release is not complete until the financed, corporate-action-aware acceptance
+workflow passes.
 
 ## Milestone 1 — daily equity buy-and-hold with financing
+
+Current validation covers Python 3.12.11/Polars 1.30.0 and Python 3.14.6/Polars
+1.44.2, including editable installation and the offline synthetic example.
 
 Limit scope to one currency/calendar, fractional long shares, equal/custom initial
 weights, raw closes, ordinary splits/cash dividends, proportional entry costs,
@@ -13,7 +17,7 @@ and all-cash cases. Use a caller-supplied calendar and offline inputs. Do not ad
 signals, scheduled rebalancing, shorts, provider dependencies, optimization,
 intraday support, or ML to this milestone.
 
-### 1A. Data contracts and return arithmetic — recommended first task
+### 1A. Data contracts and return arithmetic — implemented
 
 - Add Polars and pytest only as needed. Implement strict daily table/key validation,
   metadata/action-coverage checks, expected-session alignment, and informative
@@ -28,7 +32,7 @@ intraday support, or ML to this milestone.
 explicitly; return identities pass; no acquisition, plotting, or model imports.
 An action table can be validated here before any simulator exists.
 
-### 1B. Unlevered ledger, actions, and entry costs
+### 1B. Unlevered ledger, actions, and entry costs — implemented
 
 - Implement equal/custom allocation, post-cost sizing, fractional share quantities,
   pre/post-entry valuations, positions, trades, and costs. Specify the first-return
@@ -42,7 +46,7 @@ An action table can be validated here before any simulator exists.
 receivables, and no-silent-rebalance tests pass with currency residual tolerances.
 This is an internal slice, not completion of the user's first milestone.
 
-### 1C. Borrowing, leverage, and financing
+### 1C. Borrowing, leverage, and financing — next
 
 - Extend the same ledger with explicit debt, initial leveraged sizing, daily
   calendar-date financing, debt-repayment sweep, and leverage drift.
@@ -66,8 +70,8 @@ No successful full-period report can conceal a stopped run.
 - Create a replayable local snapshot manifest and the acceptance notebook described
   in [examples](../examples/README.md). Add small synthetic permitted inputs for an
   offline end-to-end test; do not require redistribution of licensed market data.
-- Verify install/import and tests on Python 3.12 and the chosen current development
-  version; only then declare a tested compatibility range. Pin the acceptance
+- Recheck install/import and tests on Python 3.12 and the chosen current development
+  version for the complete 1D release. Pin the acceptance
   environment for replay without freezing every future consumer's environment.
 
 **Milestone 1 acceptance criteria:**

@@ -5,10 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "research-toolkit"
 version = "0.0.0.dev0"
-description = "Auditable, notebook-friendly quantitative trading research (design stage)."
+description = "Auditable, notebook-friendly quantitative trading research."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["polars>=1.30,<2"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

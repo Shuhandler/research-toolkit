@@ -6,10 +6,10 @@
   Preserve user changes; never reset or overwrite unrelated work. Read
   `docs/project-context.md`, `docs/architecture.md`, and
   `docs/financial-conventions.md` before financial implementation.
-- This repository is currently in its setup phase. Do not implement functions
-  merely because a proposed signature appears in a document. Follow the scope of
-  the current user request. Do not create placeholder functions or empty class
-  hierarchies for future phases.
+- Milestones 1A and 1B are implemented; read `docs/api.md` for supported behavior.
+  Do not implement later functions merely because a proposed signature appears in
+  a document. Follow the current user request. Do not create placeholder functions
+  or empty class hierarchies for future phases.
 - Work only in this repository. The local reference project is read-only. Never
   push to GitHub or publish a package without explicit user authorization.
 

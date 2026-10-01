@@ -1,9 +1,12 @@
-# Testing plan — future implementation
+# Testing plan and implemented checks
 
 Prioritize independent financial examples and ledger identities over coverage
-percentages or tests that mirror implementation. No financial tests exist in this
-setup phase. Add pytest with the first working calculation, using synthetic Polars
-tables and independently computed expected values. Keep unit tests offline.
+percentages or tests that mirror implementation. Milestone 1A/1B tests now cover
+data validation, return arithmetic, entry costs, actions, cash interest, drift,
+scaling, and accounting identities using synthetic Polars tables and independent
+expected values. The leverage, metric, plotting, and research tests below remain
+targets for their later phases. Run `python -m pytest -q`; network connections are
+blocked by the unit-test fixture.
 
 ## Hand-checkable oracles
 

@@ -21,6 +21,7 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Raw prices plus explicit splits and dividend accounting in the first backtest | User chose 2A |
 | Borrowing and leverage included in the first milestone | User chose 3B |
 | Setup phase creates documentation and minimal scaffolding only; no financial functions | Initial request |
+| Implement milestones 1A and 1B; continue to defer 1C/1D | Follow-up user request after setup |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -38,8 +39,8 @@ dates, benchmark, and leverage levels are notebook inputs, never library constan
 
 These are explicit, revisable design choices, not additional user confirmations:
 
-- Python 3.12+, `src/` package layout, setuptools build backend; no runtime
-  dependencies until functionality exists.
+- Python 3.12+, `src/` package layout, setuptools build backend; Polars is now the
+  only runtime dependency, with pytest in the test extra.
 - Long-form Polars tables with explicit session/asset keys; no implicit index.
 - First release: single currency, fractional shares, long positions plus a cash
   loan, fixed initial allocation, ordinary splits and cash dividends. No external
@@ -69,8 +70,19 @@ These are explicit, revisable design choices, not additional user confirmations:
 
 ## Status and next step
 
-Setup only: documentation, package metadata, and a docstring-only import namespace.
-No implementations, financial tests, data downloads, notebooks, or releases yet.
-Implement milestone 1A in [the roadmap](roadmap.md) next: validated data contracts
-and return arithmetic on tiny offline fixtures. Continue through the explicit
-corporate-action and financed buy-and-hold ledger before calling milestone 1 done.
+Milestones 1A and 1B are implemented: strict metadata/calendar/price/action
+validation, deterministic input identities, simple/log and cumulative returns,
+equal/custom weights, and an unlevered fractional-share ledger with entry costs,
+splits, dividend receivables/payments, cash interest, and reconciliations.
+An offline synthetic Python example and financial tests are included. No reference
+code was reused, market data downloaded, notebook created, package published, or
+GitHub changes pushed.
+
+Concrete interface refinements: `returns` takes validated `MarketData` so session
+gaps cannot bypass checks; `buy_and_hold` takes explicit `cash_rate` and
+`cash_day_count` until financed accounts are added. No placeholder `Financing`,
+`performance`, or plotting objects exist. See [the API](api.md).
+
+Next is milestone 1C: borrowing, financed initial leverage, debt sweeps, and
+stop-on-margin-breach behavior through the same ledger. 1D will add performance
+metrics, benchmarks, plots, snapshot persistence, and the full acceptance notebook.

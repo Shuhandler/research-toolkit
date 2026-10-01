@@ -1,9 +1,11 @@
-# Financial conventions — proposed implementation contract
+# Financial conventions
 
-None of these calculations is implemented yet. These are the explicit conventions
-future implementation must satisfy. User-confirmed scope is recorded in
-[project context](project-context.md); numerical examples here are design oracles,
-not backtest outputs.
+Milestones 1A and 1B implement the input/return conventions and unlevered account,
+entry-cost, split, dividend, and cash-interest rules below. Borrowing, margin
+stops, performance ratios, and later allocation methods remain proposed for their
+roadmap phases. See [the API](api.md) for the exact supported subset. User-confirmed
+scope is recorded in [project context](project-context.md); numerical examples here
+are independent test oracles, not market-data backtest outputs.
 
 ## Units and return definitions
 

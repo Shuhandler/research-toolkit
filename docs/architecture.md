@@ -1,8 +1,10 @@
-# Architecture proposal — all financial interfaces unimplemented
+# Architecture and extension proposal
 
-This document defines a design target, not available functionality. Add each module
-only with its first working, tested behavior. The current package has only
-`__init__.py`; there are no stub modules or abstract provider/strategy hierarchies.
+Milestones 1A and 1B implement the data, return, allocation, cost, result, and
+unlevered ledger modules below. [The implemented API](api.md) is authoritative for
+current signatures and schemas. This document also retains later design targets;
+the full financed/performance/plotting example remains unimplemented. Add each
+future module only with working, tested behavior, without stub hierarchies.
 
 ## Boundaries and dependencies
 
@@ -92,7 +94,7 @@ fetch in a calculation. A simple manifest reader/writer is enough when needed.
 
 ## Result objects and numerical tables
 
-Proposed `MarketData` holds validated tables, metadata, and diagnostics. Proposed
+Implemented `MarketData` holds validated tables, metadata, diagnostics, and snapshot identity.
 `ReturnResult` holds a `values` table keyed by `(session, asset)`, with
 `period_start` and explicitly named `simple_return` or `log_return` columns, plus
 return-kind, frequency, basis, and source metadata. Cumulative transformations
@@ -100,19 +102,19 @@ preserve this information and add distinctly named cumulative columns. The leadi
 undefined interval remains null. This keeps standalone calculations auditable
 without depending on a simulation result.
 
-Proposed `BacktestResult` holds the following Polars tables and metadata; no prose analysis.
-Names below are candidate schema fields, not attributes available today.
+Implemented `BacktestResult` contains the tables below plus a per-action
+`receivables` table. Exact current fields are documented in [the API](api.md).
 
 | Table | Key and important fields |
 | --- | --- |
 | `daily` | `session`; `period_start`, `opening_equity`, `equity`, `pnl`, `simple_return`, `log_return`, `cumulative_pnl`, `cumulative_simple_return`, `compounded_return`, `cash`, `debt`, `dividend_receivable`, `gross_exposure`, `net_exposure`, `gross_leverage`, `drawdown` |
 | `positions` | `(session, asset)`; quantity, raw mark, market value, weight relative to equity |
 | `trades` | `trade_id`; session/time, asset, signed quantity, reference price, signed notional, execution policy, trade cost |
-| `costs` | `cost_id`; effective time, nullable `trade_id`, asset if attributable, component, amount, measured/modeled flag |
+| `costs` | `cost_id`; date/time, `trade_id`, asset, component, amount, `basis="modeled"` |
 | `events` | `event_id`; time and deterministic sequence, type, asset/action/trade identifiers, quantity/cash/debt/receivable deltas |
 | `valuations` | `(time, phase)`; pre-entry, post-entry, and subsequent closing balance-sheet values |
 | `attribution` | `(session, component, asset if applicable)`; dollar contribution, including financing and cost rows |
-| `diagnostics` | code, severity, session/asset, numerical details and reconciliation residuals |
+| `diagnostics` | session, code, currency reconciliation residual and tolerance |
 
 `daily` contains completed holding intervals, not an extra zero-duration entry
 return. The first interval includes entry costs; pre/post-entry valuations remain
@@ -125,14 +127,17 @@ metrics are null with a reason code. Invalid inputs raise; they do not become nu
 metrics. Later rolling-risk and correlation tables use this same convention.
 Status codes are diagnostics, not strategy recommendations.
 
-Results include `complete` or `stopped` status and stop reason/time. Whole-period
-performance reporting refuses an incomplete result unless an explicitly requested
-partial report labels its actual coverage. Portfolio inputs are not mutated.
+Current valid unlevered results have `status="complete"`; invalid numerical
+balances raise. Milestone 1C will add `stopped` status and stop reason/time, and
+1D whole-period reporting must refuse an incomplete result unless an explicitly
+requested partial report labels its coverage. Portfolio inputs are not mutated.
 
 ## Illustrative public API — unimplemented, do not run
 
-The six initial facade operations are proposed as `prepare_market_data`, `returns`,
-`cumulative_returns`, `equal_weights`, `buy_and_hold`, and `performance`, with a few
+The first five facade operations `prepare_market_data`, `returns`,
+`cumulative_returns`, `equal_weights`, and `buy_and_hold` are implemented.
+`performance` remains proposed, along with future financing configuration and the
+plotting namespace. The full target workflow below uses a few
 concrete policy/result types and the `plots` namespace. Avoid exporting internal
 helpers. Keyword-only policy arguments should carry meaningful names and units.
 
@@ -188,9 +193,11 @@ zero risk-free/MAR values are visible choices, not universal inferred settings.
 the simulation with another `initial_gross_leverage` to compare financed cases;
 report the resulting debt and drift, not only scaled returns.
 
-Standalone proposed calls `rt.returns(prices, method="simple", basis="price", metadata=source_metadata)` and
+Implemented standalone calls `rt.returns(market, method="simple", basis="price")` and
 `rt.cumulative_returns(return_result, method="compound")` require validated keys
-and explicit return-kind metadata. They return `ReturnResult`. `method="sum"` produces a distinctly named
+and explicit return-kind metadata. The validated `market` supplies the calendar
+and source metadata; a bare price table is not accepted. They return `ReturnResult`.
+`method="sum"` produces a distinctly named
 column; a log-return input is never silently interpreted as simple returns.
 
 ## Plotting and later extensions
