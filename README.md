@@ -21,8 +21,9 @@ backtesting must never require a model framework.
 The current library supports daily, single-currency equity buy-and-hold portfolios:
 raw prices, explicit splits and cash dividends, equal or custom initial weights,
 entry costs, cash holdings, initial leverage, calendar-day financing, and dividend
-cash repayment of debt. Saved inputs run entirely offline. Buy-and-hold never
-rebalances; scheduled strategies trade only on the supplied dates. Neither performs
+cash repayment of debt, plus opt-in payment-date dividend reinvestment. Saved inputs
+run entirely offline. Buy-and-hold never rebalances; scheduled strategies use supplied
+target dates. Either can add explicitly configured dividend purchases. Neither performs
 an implicit terminal sale. This is a research simulator, not a broker execution system.
 
 Scheduled portfolios use dated targets, explicit funding policies, concentration
@@ -80,6 +81,34 @@ costs, turnover, allocation drift and risk diagnostics. Its [short Python workfl
 shows how to assemble calls without notebook-specific library logic. Allocation
 estimates exclude the decision session and all future returns; execution occurs
 later. Unpaid dividend funding is an explicit policy. See [the exact API](docs/api.md#scheduled-allocation-and-rebalancing--milestone-2).
+
+## Automatic dividend reinvestment
+
+Pass this optional policy to either `rt.buy_and_hold(...)` or
+`rt.scheduled_rebalance(...)`:
+
+```python
+dividend_reinvestment = rt.DividendReinvestment(
+    execution="first_close_on_or_after_payment",
+    funding="before_debt_repayment",
+    scheduled_collision="rebalance_only",
+    terminal_action="hold_cash",
+)
+# Add dividend_reinvestment=dividend_reinvestment to your backtest call.
+```
+
+This reserves the actual paid dividend to buy fractional shares of the paying
+stock, including trade costs within that budget. Choose `"after_debt_repayment"`
+to repay debt first and reinvest only the remaining dividend cash. Neither option
+borrows to fund the purchase. Omitting the policy preserves existing behavior.
+
+Execution assumes payment is available before that day's close; weekend payments
+wait for the next supplied session. Scheduled targets take priority on overlapping
+dates, and no purchase occurs on the final session. A standing instruction can
+reopen a previously sold payer. These are explicit research assumptions, not a
+broker DRIP fill model. `result.dividend_reinvestments` links each paid dividend
+to its trade or other disposition. See the [full contract](docs/api.md#automatic-dividend-reinvestment)
+and the [runnable comparison](examples/dividend_reinvestment.py).
 
 ## Local development
 

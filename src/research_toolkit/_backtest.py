@@ -13,6 +13,7 @@ import polars as pl
 from ._costs import TradeCosts
 from ._data import _validated_market
 from ._financing import Financing, _below_margin
+from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, _number, _weights
 from ._results import BacktestResult
 from ._rebalancing import RebalancePolicy, _targets, _basket
@@ -56,6 +57,9 @@ SCHEMAS = {
                    "trade_cost": F, "gross_traded_notional": F, "receivable_reserved": F},
     "turnover": {"session": D, "phase": S, "gross_traded_notional": F,
                  "equity_before": F, "turnover": F},
+    "dividend_reinvestments": {"action_id": S, "asset": S, "pay_date": D,
+        "session": D, "paid_amount": F, "debt_repaid": F, "cash_released": F,
+        "signed_notional": F, "trade_cost": F, "trade_id": S, "status": S},
     "diagnostics": {"session": D, "code": S, "residual": F, "tolerance": F},
 }
 
@@ -74,7 +78,8 @@ def _check(actual, expected, scale, context):
 def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date,
                  end_session: date, policy: BuyHoldPolicy, costs: TradeCosts,
                  cash_rate: float | None = None, cash_day_count: str | None = None,
-                 financing: Financing | None = None) -> BacktestResult:
+                 financing: Financing | None = None,
+                 dividend_reinvestment: DividendReinvestment | None = None) -> BacktestResult:
     """Run a fractional-share, raw-close buy-and-hold portfolio with explicit funding.
 
     Supply ``financing`` for leveraged runs. The existing explicit ``cash_rate``
@@ -82,6 +87,8 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
     the two configurations. Rates capitalize daily, including nontrading dates.
     Breached margin or nonpositive equity stops at the failure close, preserving
     balances and setting incomplete status. No liquidation or rebalancing occurs.
+    Optional ``dividend_reinvestment`` purchases the paying asset after payment;
+    without it, quantities change only for splits.
     Entry costs reduce the first holding interval's P&L, whose denominator is
     original capital. Dividends accrue on ex-date and pay on their actual date.
 
@@ -90,11 +97,13 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
     """
     return _simulate(market, weights=weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
-        cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing)
+        cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing,
+        dividend_reinvestment=dividend_reinvestment)
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
-                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing):
+                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing,
+                        dividend_reinvestment: DividendReinvestment | None = None):
     """Execute explicit dated long-only targets through the shared daily ledger.
 
     Target decisions precede execution, every basket includes zero-weight exits,
@@ -116,18 +125,23 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
         fractional_shares=True, initial_gross_leverage=first_leverage, terminal_action="mark_only")
     return _simulate(market, weights=first_weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
-        financing=financing, schedule=plans, target_table=table, rebalance_policy=policy)
+        financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
+        dividend_reinvestment=dividend_reinvestment)
 
 
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
               costs, cash_rate=None, cash_day_count=None, financing=None,
-              schedule=None, target_table=None, rebalance_policy=None):
+              schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None):
     market = _validated_market(market)
     if market.metadata["price_basis"] != "raw":
         raise ValueError("buy_and_hold requires raw execution prices")
     if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, TradeCosts):
         raise ValueError("explicit BuyHoldPolicy and TradeCosts objects are required")
     policy.__post_init__()
+    if dividend_reinvestment is not None:
+        if not isinstance(dividend_reinvestment, DividendReinvestment):
+            raise ValueError("dividend_reinvestment must be a DividendReinvestment object or None")
+        dividend_reinvestment.__post_init__()
     capital = _number(initial_capital, "initial_capital", positive=True)
     exposure = policy.initial_gross_leverage
     if financing is not None:
@@ -186,6 +200,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     cash = capital
     debt = 0.0
     receivables = {}
+    reinvestment_rows, reinvestment_budgets = {}, {}
     pending_pnl = defaultdict(list)
     cash_deltas, receivable_deltas, debt_deltas = [], [], []
     quantity_deltas = defaultdict(list)
@@ -195,7 +210,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         seq = len(records["events"])
         records["events"].append({
             "event_id": f"E{seq:06d}", "date": day,
-            "time": closes[day] if phase in {"entry_close", "rebalance_close", "close"} else None,
+            "time": closes[day] if phase in {"entry_close", "rebalance_close", "reinvestment_close", "close"} else None,
             "sequence": seq, "phase": phase, "type": kind, "asset": asset,
             "action_id": action_id, "trade_id": trade_id,
             "quantity_delta": dq, "cash_delta": dc, "debt_delta": dd,
@@ -382,6 +397,88 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 if target_leverage <= 1 and rebalance_policy.receivable_policy == "reserve" else 0.)})
         records["turnover"].append({"session": day, "phase": "rebalance", "gross_traded_notional": traded,
                                    "equity_before": equity, "turnover": traded/equity})
+
+    def release_reinvestment(day, reason):
+        # Release an earmark, not cash itself: it was already credited at payment.
+        for action_id, budget in reinvestment_budgets.items():
+            reinvestment_rows[action_id].update(session=day, cash_released=budget, status=reason)
+        reinvestment_budgets.clear()
+
+    def sweep_cash(day):
+        nonlocal cash, debt
+        reserved = math.fsum(reinvestment_budgets.values())
+        if dividend_reinvestment is None or dividend_reinvestment.funding == "after_debt_repayment":
+            reserved = 0.
+        if debt > 0 and cash > reserved:
+            repayment = min(cash-reserved, debt)
+            cash -= repayment
+            debt -= repayment
+            event(day, "debt_repayment", dc=-repayment, dd=-repayment)
+            # Unreserved account cash pays first. If dividend cash is needed,
+            # distribute the reduction pro rata across outstanding earmarks.
+            total = math.fsum(reinvestment_budgets.values())
+            used = min(total, max(0., total-cash))
+            if used:
+                for action_id, budget in list(reinvestment_budgets.items()):
+                    reduction = budget*(used/total)
+                    remaining = budget-reduction
+                    reinvestment_rows[action_id]["debt_repaid"] += reduction
+                    if remaining == 0.:
+                        reinvestment_rows[action_id]["status"] = "debt_repaid"
+                        del reinvestment_budgets[action_id]
+                    else:
+                        reinvestment_budgets[action_id] = remaining
+
+    def reinvest(day, equity):
+        nonlocal cash
+        notionals, expenses = [], []
+        for action_id, budget in reinvestment_budgets.items():
+            row = reinvestment_rows[action_id]
+            asset = row["asset"]
+            k = math.fsum(rates[c][asset] for c in rates)
+            notional = budget/(1+k)
+            delta = notional/prices[day, asset]
+            updated_quantity = quantity[asset]+delta
+            if (not all(math.isfinite(v) and v > 0 for v in (notional, delta, updated_quantity))
+                    or updated_quantity <= quantity[asset]):
+                raise ValueError("dividend reinvestment quantity is not representable")
+            components = {c: notional*rates[c][asset] for c in rates}
+            cost = math.fsum(components.values())
+            _check(notional+cost, budget, max(capital, equity), "reinvestment_budget")
+            trade_id = f"T{len(records['trades']):06d}"
+            quantity[asset] = updated_quantity
+            cash -= budget
+            event(day, "trade", phase="reinvestment_close", asset=asset, action_id=action_id,
+                  trade_id=trade_id, dq=delta, dc=-notional)
+            records["trades"].append({"trade_id": trade_id, "session": day, "time": closes[day],
+                "asset": asset, "signed_quantity": delta, "reference_price": prices[day, asset],
+                "signed_notional": notional, "execution": "dividend_reinvestment_close", "trade_cost": cost})
+            for component, amount in components.items():
+                if not amount:
+                    continue
+                records["costs"].append({"cost_id": f"C{len(records['costs']):06d}", "date": day,
+                    "time": closes[day], "trade_id": trade_id, "asset": asset,
+                    "component": component, "amount": amount, "basis": "modeled"})
+                event(day, component, phase="reinvestment_close", asset=asset, action_id=action_id,
+                      trade_id=trade_id, dc=-amount)
+                pending_pnl[component, asset].append(-amount)
+            row.update(session=day, signed_notional=notional, trade_cost=cost,
+                       trade_id=trade_id, status="reinvested")
+            notionals.append(notional)
+            expenses.append(cost)
+        if cash < 0:
+            _check(cash, 0., max(capital, equity), "reinvestment_cash_roundoff")
+            cash = 0.
+        outstanding = math.fsum(item["outstanding"] for item in receivables.values())
+        after = math.fsum([*(quantity[a]*prices[day, a] for a in assets), cash, outstanding, -debt])
+        residual, tolerance = _check(after, equity-math.fsum(expenses), max(capital, equity), "reinvestment_cost_equity")
+        records["diagnostics"].append({"session": day, "code": "reinvestment_cost_equity",
+                                       "residual": residual, "tolerance": tolerance})
+        traded = math.fsum(notionals)
+        records["turnover"].append({"session": day, "phase": "dividend_reinvestment",
+            "gross_traded_notional": traded, "equity_before": equity, "turnover": traded/equity})
+        reinvestment_budgets.clear()
+
     opening_equity, previous_session = capital, entry_session
     cumulative_pnls, simple_returns = [], []
     wealth = 1.0
@@ -427,11 +524,18 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 cash += amount
                 item["outstanding"] = 0.0
                 event(day, "dividend_payment", asset=item["asset"], action_id=action_id, dc=amount, dr=-amount)
-        if debt > 0 and cash > 0:
-            repayment = min(cash, debt)
-            cash -= repayment
-            debt -= repayment
-            event(day, "debt_repayment", dc=-repayment, dd=-repayment)
+                if dividend_reinvestment is not None:
+                    row = {"action_id": action_id, "asset": item["asset"], "pay_date": day,
+                        "session": None, "paid_amount": amount, "debt_repaid": 0., "cash_released": 0.,
+                        "signed_notional": 0., "trade_cost": 0., "trade_id": None, "status": "pending"}
+                    reinvestment_rows[action_id] = row
+                    records["dividend_reinvestments"].append(row)
+                    reinvestment_budgets[action_id] = amount
+        if day == end_session:
+            release_reinvestment(day, "terminal_cash")
+        elif schedule and day in schedule:
+            release_reinvestment(day, "scheduled_rebalance")
+        sweep_cash(day)
         if day in session_set:
             # Old holdings earn the interval's price move. Rebalancing at this
             # close affects only future price P&L, with trade costs booked today.
@@ -446,6 +550,15 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 if before_equity > 0 and not _below_margin(
                         before_equity/before_gross if before_gross else None, threshold):
                     rebalance(day, before, outstanding, before_equity)
+            elif reinvestment_budgets:
+                before, outstanding, before_equity = balances(day, "pre_reinvestment")
+                peak = max(peak, before_equity)
+                before_gross = math.fsum(before.values())
+                if before_equity > 0 and not _below_margin(
+                        before_equity/before_gross if before_gross else None, threshold):
+                    reinvest(day, before_equity)
+                else:
+                    release_reinvestment(day, "stopped_before_trade")
             values, outstanding, equity = balances(day, "close")
             components = {key: math.fsum(amounts) for key, amounts in pending_pnl.items()}
             pnl = equity - opening_equity
@@ -501,6 +614,11 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         if day == end_session:
             break
         day += timedelta(days=1)
+    for row in records["dividend_reinvestments"]:
+        residual, tolerance = _check(row["paid_amount"], math.fsum(row[k] for k in (
+            "debt_repaid", "cash_released", "signed_notional", "trade_cost")), capital, "dividend_budget_allocation")
+        records["diagnostics"].append({"session": row["session"] or row["pay_date"],
+            "code": "dividend_budget_allocation", "residual": residual, "tolerance": tolerance})
     metadata = {
         "snapshot_id": market.snapshot_id, "source": deepcopy(market.metadata),
         "currency": market.metadata["currency"], "frequency": "1d", "return_basis": "net_equity",
@@ -530,6 +648,14 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             margin_monitoring="before_scheduled_trade_and_after_session_close",
             turnover_denominator="pre_trade_equity_entry_separately_labeled",
             no_trade_relative_tolerance=1e-13)
+    if dividend_reinvestment is not None:
+        metadata.update(dividend_reinvestment=asdict(dividend_reinvestment),
+            dividend_policy="ex_date_receivable_pay_date_cash_explicit_reinvestment",
+            reinvestment_payment_availability="before_close_on_pay_date_assumed",
+            reinvestment_asset_policy="paying_asset_even_if_previously_sold",
+            reinvestment_budget="paid_dividend_principal_net_of_assigned_debt_repayment_including_trade_costs",
+            margin_monitoring="before_scheduled_or_reinvestment_trade_and_after_session_close",
+            turnover_denominator="pre_trade_equity_entry_separately_labeled")
     return BacktestResult(**{name: pl.DataFrame(rows, schema=SCHEMAS[name])
                              for name, rows in records.items()}, metadata=metadata,
                           status=status, stop_reason=stop_reason,

@@ -185,10 +185,10 @@ def turnover(result, *, allow_partial=False, ax=None):
     if not allow_partial:
         result.require_complete()
     _, ax = _axes(ax)
-    for phase in ("entry", "rebalance"):
+    for phase in ("entry", "rebalance", "dividend_reinvestment"):
         rows = result.turnover.filter(pl.col("phase") == phase)
         if rows.height:
-            ax.scatter(rows["session"].to_list(), rows["turnover"].to_list(), label=phase.capitalize())
+            ax.scatter(rows["session"].to_list(), rows["turnover"].to_list(), label=phase.replace("_", " ").capitalize())
     ax.legend(fontsize="small")
     m = result.metadata
     status = f" | STOPPED: {m['stop_reason']} (partial)" if result.status != "complete" else ""

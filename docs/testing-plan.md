@@ -162,3 +162,16 @@ coverage. Headless plot tests inspect dates/values and reuse caller axes. The M2
 notebook is executed with acquisition blocked and six embedded charts, with manual
 visual inspection and separately written Markdown interpretation. Both supported
 validation environments continue to run M1 regression checks.
+
+## Automatic reinvestment checks — implemented
+
+`test_dividend_reinvestment.py` verifies payment-date fractional shares and net-cost
+budgets against small hand calculations, price P&L before/after a fill, same-close
+ex-date eligibility and subsequent dividend compounding, weekend receipt followed
+by a split, multiple paying assets and pro-rata debt allocation, both funding
+priorities, financing/cash-interest separation, terminal/unpaid distributions,
+scheduled collisions and reopening a sold payer. It independently reconstructs
+positions/cash/debt/receivables and attribution from events, checks trade-cost links
+and turnover, perturbs future marks, and tests pre/post-purchase margin stops and
+partial reports. Disabled/no-dividend behavior preserves existing financial tables.
+The saved five-asset example also reconciles; plotting remains optional and offline.

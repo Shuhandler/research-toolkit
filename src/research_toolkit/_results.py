@@ -53,6 +53,7 @@ class BacktestResult:
     targets: pl.DataFrame
     rebalances: pl.DataFrame
     turnover: pl.DataFrame
+    dividend_reinvestments: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
     stop_reason: str | None = None

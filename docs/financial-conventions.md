@@ -97,8 +97,10 @@ Require at least one holding interval for a full backtest; entry-only accounting
 can be tested internally. All returns compare identical interval endpoints with
 the benchmark. The ending valuation is mark-to-market, without an assumed sale
 or exit fee. Ordinary buy-and-hold quantities remain fixed except for splits.
-Dividend reinvestment, repeated target-weight multiplication, and daily leverage
-resetting would require trades and are not this strategy.
+Without an explicit dividend policy, there is no stock reinvestment. Opt-in
+`DividendReinvestment` adds payment-funded purchases, recorded as actual trades.
+Repeated target-weight multiplication and daily leverage resetting remain separate
+strategies requiring explicit trades.
 
 Later signal strategies must carry observation/availability, decision, order,
 execution, and mark times. A close-derived signal cannot earn the return ending
@@ -142,8 +144,9 @@ to `220/120`, not 2. Maintaining 2 would require another trade.
    expressed in post-split shares if a split occurs on the same date. Increase
    dividend receivables. An entry at the ex-date close does not earn that dividend.
 4. Transfer due receivables to cash on their supplied payment dates, including
-   nontrading dates. Apply the explicitly selected debt-repayment cash sweep.
-5. Execute any permitted trades (only initial entry in M1), charge their costs,
+   nontrading dates. Allocate optional reinvestment budgets, release them on
+   scheduled/terminal dates, and apply the selected funding priority and debt sweep.
+5. Check pre-trade margin, execute any scheduled basket or dividend purchases, charge their costs,
    mark at the session close, and check equity and maintenance limits.
 
 For nontrading dates process financing and cash events without inventing new
@@ -153,8 +156,9 @@ Opening holdings at entry are zero; dividends with ex-dates before entry create
 no entitlement. A dividend earned before the final session but paid afterward
 remains a receivable in ending equity. The snapshot must include its pay date.
 
-No automatic reinvestment. A benchmark total-return index may assume reinvestment;
-label that difference. Split-adjusted-only, split-and-dividend-adjusted, and raw
+Automatic reinvestment requires an explicit `DividendReinvestment` policy. A
+benchmark total-return index may use a different reinvestment convention; label
+that difference even when portfolio reinvestment is enabled. Split-adjusted-only, split-and-dividend-adjusted, and raw
 prices have distinct meanings. Snapshot metadata must specify which was supplied.
 The chosen first implementation executes only against raw prices.
 
@@ -189,8 +193,10 @@ Intraday partial-day accrual is outside M1. Rates are nonnegative in M1; future
 negative-rate support needs explicit signed-expense rules.
 
 The named `repay_debt` cash sweep uses available cash to repay debt after payments
-and interest, with any excess kept as cash. It does not sell shares, reinvest
-dividends, or maintain leverage. Constant rates are M1 assumptions; dated rate
+and interest, with any excess kept as cash. With reinvestment enabled,
+`before_debt_repayment` reserves paid dividend principal from this sweep until
+execution or release; `after_debt_repayment` leaves the sweep unchanged. The sweep
+itself does not sell shares or maintain leverage. Constant rates are M1 assumptions; dated rate
 curves and different day counts are later extensions. Risk-free rates used for
 metrics are independent of these cash/borrowing rates.
 
@@ -362,3 +368,52 @@ closing session. They retain all early rows as null until the full window exists
 with actual counts and reason codes. These are reporting diagnostics, not inputs
 available to place an order at that same close. Stopped runs require explicit
 partial-report opt-in and retain the actual dates and stop reason in plotted output.
+
+## Payment-funded automatic reinvestment
+
+A standing `DividendReinvestment` instruction purchases the paying asset with
+actual paid cash, never an unpaid entitlement. It assumes cash is available before
+the first supplied session close on or after the payment date. This is an explicit
+daily execution assumption; data contain no intraday payment timestamp and no
+broker DRIP execution price. Missing required prices still raise. A non-session
+payment earns no fabricated stock return before the next actual session.
+
+For available dividend budget `B` and the paying asset's total proportional cost
+rate `k`, purchase `N=B/(1+k)` of stock and `N/P_close` shares; charge `k*N`.
+No external cash or new debt tops up this budget. Commission, spread and impact
+are separate expenses using the same configured rates as other trades. Multiple
+paid actions receive separate linked fills; current costs are proportional, so
+splitting these fills adds no fixed-fee artifact. Fixed/minimum fees remain unsupported.
+
+With `after_debt_repayment`, unearmarked cash repays debt first and any required
+remainder reduces pending dividend budgets pro rata. With `before_debt_repayment`,
+paid principal stays earmarked through non-session dates; other cash still sweeps.
+Existing debt continues accruing financing costs, and reserved cash earns the
+configured cash rate. Cash interest is not added to the purchase budget. Both
+policies retain original ex-date entitlements regardless of later splits/sales;
+purchases use the execution date's raw mark and post-split share units.
+
+Scheduled rebalancing takes priority at an overlapping close. Release the earmark
+before the ordinary sweep/basket; do not buy and then immediately sell the same
+stock as an extra DRIP leg. The final session is mark-only: release any pending
+budget to the account and apply the ordinary cash sweep. Thus `hold_cash` means
+no final stock purchase, and released cash may repay debt. Dividends paid after
+ending remain receivables, with no reinvestment record until actual receipt.
+
+A standing instruction can reopen a payer sold at an earlier close. It does not
+retarget portfolio weights or enforce a target concentration limit between
+scheduled baskets. This behavior, timing, funding and cost assumptions are saved
+in run metadata. Disable reinvestment to retain the original quantity path.
+
+Old holdings earn the price move into the execution close. Reinvestment costs
+reduce that day's P&L; new shares first earn subsequent price moves and subsequent
+ex-date dividends. Pre-reinvestment equity is included in drawdowns. A pre-trade
+margin/insolvency failure prevents purchases; post-trade failures stop at the same
+close without liquidation. Stops freeze account balances; any blocked paid budget
+is released in the audit record without additional post-stop debt transactions.
+
+For every paid action the audit must reconcile:
+`paid_amount = debt_repaid + cash_released + signed_notional + trade_cost`.
+`cash_released` is cash returned to unrestricted account funding, not a promise
+that it remains in closing cash. These audit allocations are not extra ledger
+cash movements. Events, positions, all costs, P&L and equity still reconcile.

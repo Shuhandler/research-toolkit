@@ -80,9 +80,13 @@ def _validated_run(result, allow_partial):
            "valuations", ["session", "phase"], nonempty=True)
     expected_keys = [(daily["period_start"][0], "pre_entry"), (daily["period_start"][0], "post_entry")]
     scheduled = set(result.targets["session"].to_list()) if result.metadata.get("strategy") == "scheduled_rebalance" else set()
+    reinvested = set(result.dividend_reinvestments.filter(
+        pl.col("status").is_in(["reinvested", "stopped_before_trade"]))["session"].to_list())
     for d in daily["session"]:
         if d in scheduled:
             expected_keys.append((d, "pre_rebalance"))
+        elif d in reinvested:
+            expected_keys.append((d, "pre_reinvestment"))
         expected_keys.append((d, "close"))
     if vals.select("session", "phase").rows() != expected_keys:
         raise ValueError("valuations must include ordered pre/post-entry and every daily close")
@@ -196,7 +200,9 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
                 ddof=1, sortino_denominator="all_observations", alignment=alignment,
                 annualization="sqrt_periods_per_year_no_serial_correlation_adjustment",
                 n_obs=n, benchmark=bm_meta, allow_partial=allow_partial,
-                drawdown_basis=("pre_entry_post_entry_pre_rebalance_and_session_closes"
+                drawdown_basis=("pre_entry_post_entry_pre_trade_and_session_closes"
+                    if meta.get("dividend_reinvestment") is not None else
+                    "pre_entry_post_entry_pre_rebalance_and_session_closes"
                     if meta.get("strategy") == "scheduled_rebalance" else
                     "pre_entry_post_entry_and_session_closes"))
     return PerformanceResult(summary, comparison, benchmark_series, daily.clone(), vals.clone(),

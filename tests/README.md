@@ -34,3 +34,7 @@ trades, financing changes, asymmetric costs, exits, zero turnover, split/dividen
 timing, receivable funding, pre-trade stops and independent event reconstruction).
 The five-asset monthly example is also tested against its complete exported ledger.
 Existing M1 tests still run against the shared engine.
+
+`test_dividend_reinvestment.py` covers opt-in payment-funded DRIP, both debt
+priorities, timing/splits/entitlements, actual costs, scheduled/terminal collisions,
+margin stops, per-payment audits and independent ledger reconciliations.

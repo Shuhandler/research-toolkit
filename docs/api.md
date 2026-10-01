@@ -182,12 +182,14 @@ Once per calendar date after entry, credit opening cash at `cash_rate/365` and
 capitalize opening debt at `borrowing_rate/365`. Weekend/holiday dates are included
 without fabricating market-return rows. Borrowing-interest cost rows have null
 trade/asset IDs because financing is not a trade fee. Debt can increase from posted
-interest; no new purchases or daily leverage resetting occur.
+interest; there are no implicit purchases or daily leverage resets. The optional
+dividend policy below adds explicitly funded purchases.
 
 After that date's interest and corporate-action payments, available cash repays
 debt. Receivables cannot fund a repayment before payment. Repayment reduces cash
 and debt equally and is not a second expense. Excess cash remains available and
-earns interest from the following date. Quantities change only through splits.
+earns interest from the following date. Without opt-in dividend reinvestment,
+buy-and-hold quantities change only through splits.
 
 At each session close, compare `equity_ratio = equity/gross_exposure` with the
 configured threshold. Equality is compliant; a relative 1e-12 tolerance handles
@@ -234,8 +236,8 @@ The implementation follows [financial conventions](financial-conventions.md):
   sizing funds entry expenses and any explicitly configured loan. The caller is responsible for
   choosing weights before entry; the library cannot verify how a static mapping
   was researched.
-- Share quantities stay fixed except for splits. Dividends accrue on ex-date,
-  transfer to cash on pay date, and are not automatically reinvested. Entry on an
+- Without the optional dividend policy, share quantities stay fixed except for
+  splits. Dividends accrue on ex-date and transfer to cash on pay date. Entry on an
   ex-date does not receive that dividend. Unpaid receivables remain in equity.
 - Cash interest accrues once per calendar date after entry, including weekends,
   from the previous date's cash balance at nominal `cash_rate/365`. It is credited
@@ -258,7 +260,8 @@ The implementation follows [financial conventions](financial-conventions.md):
 | `trades` | Trade ID, session/UTC close, asset, signed quantity/notional, reference price, execution policy, cost |
 | `costs` | Cost ID, date/time, nullable trade ID/asset, component, amount, modeled basis; nonzero trade costs and calendar-date borrowing interest |
 | `events` | Stable event ID/sequence, calendar date, nullable UTC time, phase, type, linked IDs, quantity/cash/debt/receivable deltas |
-| `valuations` | Pre-entry, post-entry, and subsequent close balance sheets |
+| `valuations` | Pre-entry, post-entry, applicable pre-trade, and closing balance sheets |
+| `dividend_reinvestments` | Per-paid-action funding disposition and linked reinvestment trade; typed empty if disabled |
 | `attribution` | Session, component, asset (null for account interest), dollar P&L; sums to daily P&L |
 | `receivables` | Session/action, ex/pay dates, entitled shares, original amount, outstanding amount; includes paid entitlements with zero outstanding |
 | `diagnostics` | Session, reconciliation code, residual, currency tolerance |
@@ -607,7 +610,7 @@ Every `BacktestResult` now also contains typed tables:
 | --- | --- |
 | `targets` | The validated, sorted requested target schema above; empty for buy-and-hold |
 | `rebalances` | `session`, `decision_session`, `equity_before`, `equity_after`, `target_gross_leverage`, `actual_gross_leverage`, `trade_cost`, `gross_traded_notional`, `receivable_reserved` |
-| `turnover` | `session`, `phase` (`entry`/`rebalance`), `gross_traded_notional`, `equity_before`, `turnover` |
+| `turnover` | `session`, `phase` (`entry`/`rebalance`/`dividend_reinvestment`), `gross_traded_notional`, `equity_before`, `turnover` |
 
 Dates are `Date`, labels `String`, numerics `Float64`. `receivable_reserved` is the
 **dollar reduction in requested risky notional** caused by reserve sizing, not an
@@ -677,3 +680,78 @@ shows risky exposure, cash, debt and receivables. Existing `plots.allocation(rep
 shows scheduled changes and intervening drift. All return `(Figure, Axes)`, preserve
 null gaps, and consume prepared numerical tables without rerunning allocation or
 simulation. See [the runnable example](../examples/scheduled_rebalancing.py).
+
+## Automatic dividend reinvestment
+
+Both `buy_and_hold` and `scheduled_rebalance` accept the additional keyword
+`dividend_reinvestment: DividendReinvestment | None = None`. Omit it to preserve
+existing cash/debt behavior. All policy fields are required:
+
+```python
+reinvestment = rt.DividendReinvestment(
+    execution="first_close_on_or_after_payment",
+    funding="before_debt_repayment",  # Or "after_debt_repayment".
+    scheduled_collision="rebalance_only",
+    terminal_action="hold_cash",
+)
+# Supply dividend_reinvestment=reinvestment in either simulator call.
+```
+
+- **Timing and asset:** a standing instruction buys the paying asset at the first
+  supplied session close on/after actual payment, assuming cash is available before
+  that close. Weekend payments wait; unpaid receivables are never spent. Raw close
+  and fractional shares are used. The policy applies to all entitled assets and
+  can reopen a payer sold by an earlier scheduled basket; there is no per-asset
+  enrollment/cancellation model yet.
+- **Funding:** `before_debt_repayment` reserves paid dividend principal before the
+  sweep; existing debt continues accruing interest. `after_debt_repayment` repays
+  debt first, using unearmarked cash before proportionately reducing pending
+  dividend budgets. Only the remainder buys shares. Neither borrows for DRIP or
+  spends unrelated cash. Interest on reserved cash is not reinvested.
+- **Costs:** budget includes configured commission, half-spread and impact:
+  `notional = budget/(1 + total_cost_rate)`. Each paid action has its own fill and
+  linked actual cost rows. Existing proportional models apply; broker DRIP fee
+  schedules, discounts, tax withholding and measured fill prices are not modeled.
+- **Collisions:** `rebalance_only` releases the pending budget into account cash
+  before the sweep and scheduled basket. No extra DRIP trade runs on that close.
+  `hold_cash` preserves the final mark-only session; cash may still repay debt.
+  These are currently the only supported collision/terminal policies.
+- **Risk:** check maintenance/nonpositive equity before purchases and again after
+  costs/marks; stopped runs retain actual coverage. DRIP never restores target
+  weights/leverage or enforces a target concentration limit between scheduled dates.
+  Old holdings earn the move into the fill; new shares earn only later moves and
+  later ex-date entitlements. Analytical `returns(..., dividend_policy="reinvest_ex_close")`
+  remains separate and never configures the simulator.
+
+`result.dividend_reinvestments` has one row per nonzero entitled payment processed
+while the policy is enabled (not per announced or unpaid action):
+
+| Column | Type and meaning |
+| --- | --- |
+| `action_id`, `asset` | String; original action and paying asset |
+| `pay_date` | Date; actual receipt date, possibly a non-session |
+| `session` | Date, nullable; execution/release/check session; null if entirely consumed by the ordinary debt sweep |
+| `paid_amount` | Float64; total entitled cash received |
+| `debt_repaid` | Float64; earmarked principal consumed by the ordinary sweep before disposition |
+| `cash_released` | Float64; earmark released to normal account funding, potentially used for debt or a scheduled basket |
+| `signed_notional`, `trade_cost` | Float64; actual DRIP purchase and associated cost, zero without a fill |
+| `trade_id` | String, nullable; join to `trades` and `costs` |
+| `status` | String: `reinvested`, `debt_repaid`, `scheduled_rebalance`, `terminal_cash`, or `stopped_before_trade` |
+
+The four disposition amounts sum to `paid_amount`. Audit rows do not themselves
+post additional cash events. `cash_released` need not equal retained closing cash.
+A pre-trade stop releases its earmark in the audit and freezes ledger balances;
+there is no additional post-stop sweep. All normal accounting reconciliations run.
+
+Purchases use trade `execution="dividend_reinvestment_close"`; related events have
+`phase="reinvestment_close"`, a UTC close time and the original `action_id`.
+A funded execution/check adds a `pre_reinvestment` valuation, retained in reports
+and drawdown calculations. `turnover` adds `phase="dividend_reinvestment"` with
+combined purchase notional divided by that close's pre-purchase equity. The
+turnover plot displays it separately. Existing performance, rolling risk, exposure,
+allocation and attribution plots consume these results without rerunning simulation.
+
+Metadata stores the full policy under `dividend_reinvestment`, plus payment
+availability, standing payer instruction, budget, margin and turnover conventions.
+No new runtime dependencies or network access are required. See
+[the runnable example](../examples/dividend_reinvestment.py).

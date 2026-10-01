@@ -24,7 +24,8 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Implement milestones 1A and 1B; continue to defer 1C/1D | Follow-up user request after setup |
 | Implement milestone 1C | Subsequent user request |
 | Implement milestone 1D, including reports, plots and offline acceptance notebook | Prior user request |
-| Implement milestone 2 | Latest user request |
+| Implement milestone 2 | Prior user request |
+| Implement realistic automatic dividend reinvestment after payment | Latest user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -52,8 +53,10 @@ These are explicit, revisable design choices, not additional user confirmations:
 - Entry at an explicitly chosen session close from weights decided beforehand.
   Cost-aware sizing targets gross exposure relative to post-entry net equity.
   Portfolio weights and leverage then drift.
-- Dividends accrue as receivables on ex-date and become cash on pay date; no
-  automatic stock reinvestment. Cash first repays debt under the named sweep policy.
+- Dividends accrue as receivables on ex-date and become cash on pay date. By
+  default, cash repays debt and any excess remains cash. The implemented opt-in
+  reinvestment policy can instead reserve paid principal for same-asset purchases;
+  the caller explicitly chooses funding priority.
 - Fixed nominal financing rates with actual elapsed days/365; configurable
   research margin threshold with stop-on-breach. This is not a broker margin model.
 - Strict date alignment by default. Explicit supplied session calendars and source
@@ -127,3 +130,25 @@ Engineering decisions made within M2 (not additional user confirmations):
 Next is milestone 3: dated signals and chronological research boundaries, retaining
 these timing and accounting contracts. Real-data research can also begin after
 choosing permitted sources and assumptions.
+
+## Payment-date reinvestment extension — implemented
+
+The user requested realistic automatic reinvestment. `DividendReinvestment` now
+works with both simulators through the shared ledger. Existing calls retain their
+cash/debt behavior. These detailed policies are engineering choices exposed in the
+API, not additional user confirmations:
+
+- A standing same-asset instruction executes at the first supplied close on or
+  after payment, assuming payment is available before that close. No ex-date credit
+  funds purchases. Fractional quantities and actual modeled trade costs apply.
+- Choose `before_debt_repayment` to reserve paid principal (existing debt continues
+  accruing), or `after_debt_repayment` to reinvest residual dividend cash. No extra
+  loan is taken for reinvestment. Interest on held cash is not added to its budget.
+- Scheduled baskets take priority at a coincident close; the dividend earmark is
+  released to normal account funding. The final session stays mark-only.
+- Reinvestment remains enabled for the payer even if an earlier scheduled basket
+  sold that asset; it can reopen a position. Per-asset enrollment/cancellation and
+  broker-specific payment timestamps/fills remain future features.
+- Per-payment records link cash receipt, earmarked debt repayment, released cash,
+  purchases, fees and status. Pre/post-trade margin checks and all reconciliations
+  apply. Analytical `reinvest_ex_close` returns remain a separate convention.

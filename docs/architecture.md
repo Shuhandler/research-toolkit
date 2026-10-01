@@ -16,6 +16,7 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_results.py` | Concrete validated data/result containers | As their consumers arrive |
 | `_portfolio.py` | Equal/custom weights, exposure and drift calculations | 1B |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
+| `_dividends.py` | Explicit payment-funded reinvestment policy; execution stays in the shared ledger | Post-M2 |
 | `_financing.py` | Explicit cash/loan rates, day count, sweep and margin configuration | 1C |
 | `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
 | `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
@@ -116,7 +117,8 @@ Implemented `BacktestResult` contains the tables below plus a per-action
 | `trades` | `trade_id`; session/time, asset, signed quantity, reference price, signed notional, execution policy, trade cost |
 | `costs` | `cost_id`; date/time, nullable `trade_id`/asset for financing charges, component, amount, `basis="modeled"` |
 | `events` | `event_id`; time and deterministic sequence, type, asset/action/trade identifiers, quantity/cash/debt/receivable deltas |
-| `valuations` | `(time, phase)`; pre-entry, post-entry, and subsequent closing balance-sheet values |
+| `valuations` | `(time, phase)`; pre-entry, post-entry, pre-trade checks, and closing balance-sheet values |
+| `dividend_reinvestments` | Paid action ID; funding disposition, execution session, linked trade/cost, and status |
 | `attribution` | `(session, component, asset if applicable)`; dollar contribution, including financing and cost rows |
 | `diagnostics` | session, code, currency reconciliation residual and tolerance |
 

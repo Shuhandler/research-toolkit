@@ -50,8 +50,10 @@
   leverage/financing are confirmed first-release requirements. Never treat an
   adjusted series as executable share prices or count its dividends twice.
 - Use only information available before the specified decision/execution time.
-  Buy-and-hold means fixed quantities apart from corporate actions; drifting
-  weights and leverage must not trigger implicit trades.
+  Buy-and-hold means fixed quantities apart from splits and explicitly enabled
+  payment-funded dividend purchases; drifting weights and leverage must not trigger
+  implicit trades. Preserve the selected dividend funding priority, scheduled-trade
+  collision policy, final-session mark-only rule, and per-payment audit records.
 - Keep buy-and-hold and scheduled strategies on the shared accounting engine.
   Scheduled decisions must precede execution; trailing allocation/risk inputs end
   strictly before the decision session. Missing/non-session execution dates raise.

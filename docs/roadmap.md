@@ -141,3 +141,13 @@ multi-currency and complex corporate actions; richer measured spread/impact mode
 optional interactive plotting. Prioritize an actual research need before adding a
 dependency or framework. Each extension retains the same reconciliation and
 provenance obligations. None is required to plot or backtest a basic portfolio.
+
+## User-requested post-M2 extension — implemented
+
+Payment-funded automatic dividend reinvestment now works in both simulators.
+Explicit policies select debt priority, first-close timing, scheduled-basket
+priority and terminal cash treatment. Fractional purchases use actual trade costs;
+per-payment audits and pre/post-trade margin checks reconcile through the existing
+ledger. Broker-specific DRIP fills/timestamps, tax withholding, per-asset enrollment
+and fixed/minimum fee models remain outside this extension. Milestone 3 is still
+the next planned implementation phase.

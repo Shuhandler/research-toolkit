@@ -107,3 +107,24 @@ concentration limit and capital; the short example workflow holds explicit fee,
 funding and margin settings. Its Markdown observations were written after inspecting
 the default tables and figures. Inputs are synthetic; no provider, license choice or
 new dependency is needed to run it offline after installation.
+
+## Payment-date dividend reinvestment
+
+[dividend_reinvestment.py](dividend_reinvestment.py) compares default cash sweeping,
+debt-first reinvestment and reinvestment-first reservation on the same saved
+five-asset synthetic snapshot. All use identical initial weights, capital, costs
+and financing. Import `run_example(initial_capital=..., gross_leverage=...)` into a
+notebook for the numerical runs, reports and comparison table. No plotting import
+is required for that function.
+
+```sh
+python examples/dividend_reinvestment.py
+```
+
+The script writes daily/payment audits, a comparison CSV and two PNG figures under
+ignored `artifacts/dividend_reinvestment/`. The standing instruction buys the paying
+stock at the first supplied close on/after payment, with costs inside the dividend
+budget. Payments are assumed available before the close. It does not model broker
+DRIP discounts, exact fills, withholding or per-asset enrollment. The final session
+remains mark-only. This example does not change the existing acceptance notebooks'
+cash-held dividend assumptions or their interpretation.
