@@ -6,6 +6,12 @@ reconciliation outputs. After installing this checkout, run
 `python examples/unlevered_buy_and_hold.py` from the repository root. It does not
 download data or imply market-data performance conclusions.
 
+[financed_buy_and_hold.py](financed_buy_and_hold.py) reuses the same synthetic
+snapshot for 1×/2× financed comparisons and a separate price-shock scenario that
+stops on margin breach. Run `python examples/financed_buy_and_hold.py` from the
+repository root. It shows `require_complete()` for complete comparisons and
+explicitly labels the stopped scenario's requested/actual coverage.
+
 ## Acceptance notebook specification — not implemented
 
 Create `buy_and_hold_equities.ipynb` during milestone 1D, after the tested library

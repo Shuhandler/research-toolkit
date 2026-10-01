@@ -1,4 +1,4 @@
-# Implemented API: milestones 1A and 1B
+# Implemented API: milestones 1A–1C
 
 Use `import research_toolkit as rt`. The five implemented functions are
 `prepare_market_data`, `returns`, `cumulative_returns`, `equal_weights`, and
@@ -6,7 +6,7 @@ Use `import research_toolkit as rt`. The five implemented functions are
 tables are Polars DataFrames. See the runnable
 [offline example](../examples/unlevered_buy_and_hold.py) for complete inputs.
 
-Borrowing/leverage above 1, short positions, scheduled trading, performance ratios,
+Short positions, scheduled trading, performance ratios,
 benchmark comparisons, and plotting are **not implemented**. The larger API in
 [architecture](architecture.md) remains a design proposal where explicitly labeled.
 
@@ -112,7 +112,7 @@ nulls, missing/duplicate keys, broken interval links, invalid return kinds, and
 nonfinite or unrepresentable wealth. Standalone simple returns must exceed −1;
 default/bankruptcy handling is not implemented by these positive-price utilities.
 
-## Allocation and unlevered simulation
+## Allocation and simulation
 
 ```python
 weights = rt.equal_weights(["A", "B"])  # Or {"A": 0.4, "B": 0.6}.
@@ -130,10 +130,84 @@ result = rt.buy_and_hold(
 ```
 
 Policy fields and cost/rate inputs are required, including explicit zero rates.
-Initial exposure is limited to `0 <= initial_gross_leverage <= 1`: zero is all cash,
-one is fully invested after costs, and intermediate values retain cash. Values
-above one raise until milestone 1C. No `Financing` class exists yet; `cash_rate`
-and `cash_day_count` configure the implemented cash-interest leg only.
+Initial exposure must be nonnegative: zero is all cash, one is fully invested
+after costs, intermediate values retain cash, and values above one borrow through
+an explicit `Financing` configuration. The `cash_rate`/`cash_day_count` pair shown
+above remains supported for unlevered calls. Omitting all rate configuration fails;
+there is no inferred cash or loan rate.
+
+## Financing and leverage
+
+Keep the same weights, data, and entry/exit sessions, set the desired initial
+exposure in `BuyHoldPolicy`, and replace the cash-rate pair with `financing`:
+
+```python
+result = rt.buy_and_hold(
+    market, weights=weights, initial_capital=1_000.0,
+    entry_session=entry_date, end_session=end_date,
+    policy=rt.BuyHoldPolicy(
+        execution="entry_close", sizing="post_cost_equity", fractional_shares=True,
+        initial_gross_leverage=2.0, terminal_action="mark_only",
+    ),
+    costs=rt.TradeCosts(commission_bps=5.0, half_spread_bps=2.0, impact_bps=0.0),
+    financing=rt.Financing(
+        cash_rate=0.02, borrowing_rate=0.08, day_count="ACT/365F",
+        maintenance_equity_ratio=0.4, on_breach="stop", cash_sweep="repay_debt",
+    ),
+)
+result.require_complete()  # Raises if the run stopped, including on the final date.
+result.daily.select("session", "equity", "debt", "cash", "gross_leverage", "equity_ratio")
+```
+
+These example rates and threshold are modeling assumptions, not library defaults
+or broker rules. Every `Financing` field is required. Cash/borrowing rates must be
+finite nonnegative annual nominal fractions; only `ACT/365F` is supported.
+`maintenance_equity_ratio` must lie in `(0, 1]`; it may be explicit `None` only
+when initial exposure does not exceed 1. `on_breach="stop"` and
+`cash_sweep="repay_debt"` are the supported policies. Supplying `financing` together
+with either non-None legacy cash-rate argument raises rather than choosing one.
+
+Gross initial notional `N=L*C/(1+L*k)` targets exposure relative to post-cost equity.
+Here C is starting equity, L initial leverage, and k the weighted proportional
+entry cost. The actual order basket's funding need determines the loan; a borrowing
+event credits cash and debt **before** entry trades and costs. Borrowing is not P&L.
+Initial funding must leave positive equity and satisfy the maintenance threshold;
+otherwise the call raises instead of returning an invalid entry.
+
+Once per calendar date after entry, credit opening cash at `cash_rate/365` and
+capitalize opening debt at `borrowing_rate/365`. Weekend/holiday dates are included
+without fabricating market-return rows. Borrowing-interest cost rows have null
+trade/asset IDs because financing is not a trade fee. Debt can increase from posted
+interest; no new purchases or daily leverage resetting occur.
+
+After that date's interest and corporate-action payments, available cash repays
+debt. Receivables cannot fund a repayment before payment. Repayment reduces cash
+and debt equally and is not a second expense. Excess cash remains available and
+earns interest from the following date. Quantities change only through splits.
+
+At each session close, compare `equity_ratio = equity/gross_exposure` with the
+configured threshold. Equality is compliant; a relative 1e-12 tolerance handles
+roundoff at the boundary. All-cash equity ratio is null and no margin test applies.
+The ratio uses receivables in equity and risky holdings in gross exposure, exactly
+as the balance sheet defines them. This is daily research margin monitoring,
+not intraday or broker-specific margin enforcement.
+
+If maintenance fails or equity is nonpositive, the run retains that close and
+stops. `status="stopped"`, `stop_reason` (`maintenance_margin_breach` or
+`nonpositive_equity`), `stop_session`, and `stop_time` identify the failure.
+Insolvency takes precedence if both conditions occur. Metadata retains requested
+`end_session` and adds `actual_end_session`; a failure at the requested end is still
+a stopped run. No later charge, payment, mark, or automatic liquidation occurs.
+
+The final P&L and simple return can represent losses at or beyond −100%; they are
+not clipped. For nonpositive equity, log return, gross leverage, and position
+equity weights are null. The signed compounded return still reconciles to ending
+equity/initial capital minus one. Completed results have null stop fields.
+`require_complete()` returns the result when complete and raises `ValueError`
+otherwise. Call it before full-period comparisons. Partial analysis must explicitly
+show actual coverage and the stop reason. Full performance reports remain for 1D.
+
+## Shared allocation and accounting rules
 
 Weights are risky-asset proportions, not weights of net equity. Accept either an
 asset mapping or a Polars table (`asset: String`, `weight: Float64`). They may
@@ -153,7 +227,7 @@ added on top. Fixed/minimum fees and nonlinear impact are not supported.
 The implementation follows [financial conventions](financial-conventions.md):
 
 - Predetermined dollar allocations execute at the chosen entry close; post-cost
-  sizing funds entry expenses without borrowing. The caller is responsible for
+  sizing funds entry expenses and any explicitly configured loan. The caller is responsible for
   choosing weights before entry; the library cannot verify how a static mapping
   was researched.
 - Share quantities stay fixed except for splits. Dividends accrue on ex-date,
@@ -165,7 +239,7 @@ The implementation follows [financial conventions](financial-conventions.md):
 - The first daily interval opens at original capital **before fees**. Its P&L
   includes entry costs; later intervals open at the previous closing equity.
   Pre/post-entry valuations are recorded separately. No terminal sale is assumed.
-- The ledger checks shares against event deltas, cash/receivable balances against
+- The ledger checks shares against event deltas, cash/debt/receivable balances against
   events, P&L against attribution, cumulative P&L against equity change, and
   compounded returns against equity. Material residuals raise `ArithmeticError`.
 
@@ -175,20 +249,22 @@ The implementation follows [financial conventions](financial-conventions.md):
 
 | Table | Main fields / meaning |
 | --- | --- |
-| `daily` | Session/period start, opening and ending equity, dollar P&L, simple/log returns, cumulative P&L and simple-return sum, compounded return, cash, debt (zero), receivables, exposure, leverage, closing drawdown, entry-cost flag |
+| `daily` | Session/period start, opening and ending equity, dollar P&L, simple/log returns, cumulative P&L and simple-return sum, compounded return, cash, debt, receivables, exposure, leverage, equity ratio, margin-breach flag, closing drawdown, entry-cost flag |
 | `positions` | Session/asset, quantity, raw mark, value, net-equity weight; includes entry session |
 | `trades` | Trade ID, session/UTC close, asset, signed quantity/notional, reference price, execution policy, cost |
-| `costs` | Cost ID, date/time, trade ID, asset, component, amount, modeled basis; only nonzero components of actual trades |
+| `costs` | Cost ID, date/time, nullable trade ID/asset, component, amount, modeled basis; nonzero trade costs and calendar-date borrowing interest |
 | `events` | Stable event ID/sequence, calendar date, nullable UTC time, phase, type, linked IDs, quantity/cash/debt/receivable deltas |
 | `valuations` | Pre-entry, post-entry, and subsequent close balance sheets |
-| `attribution` | Session, component, asset (null for cash interest), dollar P&L; sums to daily P&L |
+| `attribution` | Session, component, asset (null for account interest), dollar P&L; sums to daily P&L |
 | `receivables` | Session/action, ex/pay dates, entitled shares, original amount, outstanding amount; includes paid entitlements with zero outstanding |
 | `diagnostics` | Session, reconciliation code, residual, currency tolerance |
 
 Date-only interest/action events have null `time` and `phase="before_close"`;
 they are modeled daily events, not invented observed timestamps. Sequence follows
-interest → splits → ex-date accrual → pay-date cash, and entry trades have their
-actual supplied closing timestamp. No market-return rows are created on weekends.
+cash/borrowing interest → splits → ex-date accrual → pay-date cash → debt repayment.
+Entry funding/trades and stop events have their supplied closing timestamp;
+stop events have `phase="close"` and zero balance deltas. No market-return rows
+are created on weekends.
 
 Currency tolerances are `min(0.009, 1e-8 + 1e-12 * scale)`; quantity checks use
 1e-12 absolute/relative tolerance. Tiny entry cash roundoff is explicitly reported,
@@ -196,16 +272,17 @@ and fully invested cash is set to zero only after passing that check. All other
 balances remain auditable; no material cash deficits are hidden.
 
 Metadata records source/snapshot identity, resolved weights/policy/cost rates,
-cash rate/day count, dividend/return conventions, currency, dates, package/Python/
+cash/borrowing rates, day count, financing configuration, stop status/coverage,
+dividend/return conventions, currency, dates, package/Python/
 Polars versions, immediate settlement and excluded taxes. No Git command or
 filesystem/network access occurs during simulation. Record a commit/dirty state
 externally alongside saved outputs if needed for development-run reproduction.
 
 Daily drawdown uses a peak starting at original capital. The post-entry loss is
 visible in `valuations` even if it recovers before the first interval close;
-full drawdown reporting over all valuations belongs to 1D. Numerical overflow or
-invalid balances raise rather than silently returning partial results. Valid 1B
-runs return `status="complete"`; leveraged stop-on-margin-breach behavior is 1C.
+full drawdown reporting over all valuations belongs to 1D. Numerical overflow,
+invalid input/funding, or failed reconciliations raise; they are not disguised as
+ordinary margin stops. Stopped runs preserve real finite negative/zero equity.
 
 Runtime dependency: Polars only. No plotting, provider, ML, annualization, or
 benchmark code is imported or invoked. All tests and the example run offline.

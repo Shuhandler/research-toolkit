@@ -4,9 +4,9 @@ A notebook-friendly Python library for quantitative trading research: prepare
 market data, construct portfolios, simulate trades, measure performance, and plot
 results through a small, consistent interface.
 
-**Status: milestones 1A and 1B implemented.** Strict Polars input validation,
-return arithmetic, and an unlevered buy-and-hold ledger are available. Borrowing,
-performance ratios, benchmark comparisons, plotting, and data adapters remain
+**Status: milestones 1A–1C implemented.** Strict Polars input validation,
+return arithmetic, and a buy-and-hold ledger with borrowing and margin stops are
+available. Performance ratios, benchmark comparisons, plotting, and data adapters remain
 unimplemented. See the [implemented API](docs/api.md) for the supported contracts.
 
 ## Purpose and scope
@@ -19,9 +19,8 @@ backtesting must never require a model framework.
 
 The current library supports daily, single-currency equity buy-and-hold portfolios:
 raw prices, explicit splits and cash dividends, equal or custom initial weights,
-entry costs, cash holdings, and calendar-day cash interest. Borrowing and leverage
-comparisons follow in milestone 1C. Saved
-inputs must run entirely offline. There is no automatic rebalancing or terminal
+entry costs, cash holdings, initial leverage, calendar-day financing, and dividend
+cash repayment of debt. Saved inputs run entirely offline. There is no automatic rebalancing or terminal
 sale. This is a research simulator, not a broker execution system.
 
 Later work covers inverse-volatility allocation, scheduled rebalancing, signals,
@@ -42,10 +41,14 @@ source metadata. `rt.returns(market, method="simple", basis="price")` and
 `rt.equal_weights(...)` or custom weights feed `rt.buy_and_hold(...)`, which returns
 positions, trades, costs, corporate-action events, receivables, daily P&L, equity,
 and reconciliation diagnostics. The first return includes entry costs once.
+Supply `rt.Financing(...)` for borrowing, with explicit rates, day count, cash sweep,
+and maintenance threshold. Runs stop on a breached threshold or nonpositive equity;
+use `result.require_complete()` before treating a result as a full-period run.
 
 The [offline example](examples/unlevered_buy_and_hold.py) supplies a complete small
 synthetic portfolio with a split, dividend, and entry costs. All quantities and
-financial policies are explicit. The larger [architecture](docs/architecture.md)
+financial policies are explicit. The [financed example](examples/financed_buy_and_hold.py)
+compares 1× and 2× initial leverage and demonstrates a stopped run. The larger [architecture](docs/architecture.md)
 also contains planned APIs; `rt.performance` and `rt.plots` are not available yet.
 
 The acceptance notebook will use five stocks, $100 million starting equity, one
@@ -65,6 +68,7 @@ source .venv/bin/activate
 python -m pip install -e '.[test]'
 python -m pytest -q
 python examples/unlevered_buy_and_hold.py
+python examples/financed_buy_and_hold.py
 ```
 
 Run the notebook kernel from that environment. The commands install the local

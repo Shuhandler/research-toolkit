@@ -11,7 +11,8 @@ import polars as pl
 import research_toolkit as rt
 
 
-def main():
+def make_market():
+    """Prepare the synthetic snapshot shared by both buy-and-hold examples."""
     sessions = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)]
     prices = pl.DataFrame({
         "session": sessions * 2,
@@ -30,7 +31,7 @@ def main():
         "action_id": ["dividend-A"], "asset": ["SYNTH_A"],
         "ex_session": [sessions[1]], "pay_date": [sessions[2]], "cash_per_share": [1.0],
     })
-    market = rt.prepare_market_data(
+    return rt.prepare_market_data(
         prices=prices, sessions=calendar, splits=splits, dividends=dividends,
         metadata={
             "source": "synthetic example v1", "retrieved_at": "2024-02-01T00:00:00Z",
@@ -42,6 +43,11 @@ def main():
         },
         missing="raise",
     )
+
+
+def main():
+    market = make_market()
+    sessions = market.sessions["session"].to_list()
     # These price-only returns intentionally retain the split jump. The ledger
     # below instead accounts for the extra shares and cash dividend explicitly.
     price_returns = rt.returns(market, method="simple", basis="price")

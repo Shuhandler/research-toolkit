@@ -1,6 +1,7 @@
 """Concrete numerical containers. No calculation, plotting, or I/O side effects."""
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 import polars as pl
@@ -34,7 +35,11 @@ class ReturnResult:
 
 @dataclass(frozen=True)
 class BacktestResult:
-    """Unlevered buy-and-hold records; all monetary fields use metadata currency."""
+    """Buy-and-hold records, including the failure close for a stopped run.
+
+    All monetary fields use metadata currency. Call ``require_complete()`` before
+    presenting results as covering the entire requested period.
+    """
 
     daily: pl.DataFrame
     positions: pl.DataFrame
@@ -47,3 +52,12 @@ class BacktestResult:
     diagnostics: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
+    stop_reason: str | None = None
+    stop_session: date | None = None
+    stop_time: datetime | None = None
+
+    def require_complete(self) -> "BacktestResult":
+        """Return this result or reject a stopped run as a full-period result."""
+        if self.status != "complete":
+            raise ValueError(f"backtest {self.status} on {self.stop_session}: {self.stop_reason}")
+        return self

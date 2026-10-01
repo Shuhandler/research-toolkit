@@ -1,7 +1,7 @@
 # Architecture and extension proposal
 
-Milestones 1A and 1B implement the data, return, allocation, cost, result, and
-unlevered ledger modules below. [The implemented API](api.md) is authoritative for
+Milestones 1A–1C implement the data, return, allocation, cost, financing, result,
+and account ledger modules below. [The implemented API](api.md) is authoritative for
 current signatures and schemas. This document also retains later design targets;
 the full financed/performance/plotting example remains unimplemented. Add each
 future module only with working, tested behavior, without stub hierarchies.
@@ -15,7 +15,8 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_returns.py` | Simple/log returns and cumulative transformations | 1A |
 | `_results.py` | Concrete validated data/result containers | As their consumers arrive |
 | `_portfolio.py` | Equal/custom weights, exposure and drift calculations | 1B |
-| `_costs.py` | Trade-level commissions/spread assumptions; financing calculations | 1B–1C |
+| `_costs.py` | Trade-level commissions/spread assumptions | 1B |
+| `_financing.py` | Explicit cash/loan rates, day count, sweep and margin configuration | 1C |
 | `_backtest.py` | Ordered events, quantities, cash, receivables, debt, reconciliation | 1B–1C |
 | `_metrics.py` | Performance tables, benchmark comparisons, rolling calculations | 1D onward |
 | `plots.py` | Public plotting namespace consuming prepared numerical results | 1D onward |
@@ -107,10 +108,10 @@ Implemented `BacktestResult` contains the tables below plus a per-action
 
 | Table | Key and important fields |
 | --- | --- |
-| `daily` | `session`; `period_start`, `opening_equity`, `equity`, `pnl`, `simple_return`, `log_return`, `cumulative_pnl`, `cumulative_simple_return`, `compounded_return`, `cash`, `debt`, `dividend_receivable`, `gross_exposure`, `net_exposure`, `gross_leverage`, `drawdown` |
+| `daily` | `session`; `period_start`, `opening_equity`, `equity`, `pnl`, `simple_return`, `log_return`, `cumulative_pnl`, `cumulative_simple_return`, `compounded_return`, `cash`, `debt`, `dividend_receivable`, `gross_exposure`, `net_exposure`, `gross_leverage`, `drawdown`, `equity_ratio`, `margin_breached` |
 | `positions` | `(session, asset)`; quantity, raw mark, market value, weight relative to equity |
 | `trades` | `trade_id`; session/time, asset, signed quantity, reference price, signed notional, execution policy, trade cost |
-| `costs` | `cost_id`; date/time, `trade_id`, asset, component, amount, `basis="modeled"` |
+| `costs` | `cost_id`; date/time, nullable `trade_id`/asset for financing charges, component, amount, `basis="modeled"` |
 | `events` | `event_id`; time and deterministic sequence, type, asset/action/trade identifiers, quantity/cash/debt/receivable deltas |
 | `valuations` | `(time, phase)`; pre-entry, post-entry, and subsequent closing balance-sheet values |
 | `attribution` | `(session, component, asset if applicable)`; dollar contribution, including financing and cost rows |
@@ -127,17 +128,18 @@ metrics are null with a reason code. Invalid inputs raise; they do not become nu
 metrics. Later rolling-risk and correlation tables use this same convention.
 Status codes are diagnostics, not strategy recommendations.
 
-Current valid unlevered results have `status="complete"`; invalid numerical
-balances raise. Milestone 1C will add `stopped` status and stop reason/time, and
-1D whole-period reporting must refuse an incomplete result unless an explicitly
-requested partial report labels its coverage. Portfolio inputs are not mutated.
+Results carry `complete` or `stopped` status and stop reason/session/time. The
+failure close is retained, with requested and actual coverage in metadata.
+`require_complete()` rejects stopped runs; 1D whole-period reports must call it
+unless an explicitly requested partial report labels coverage and stop reason.
+Numerical failures still raise. Portfolio inputs are not mutated.
 
 ## Illustrative public API — unimplemented, do not run
 
 The first five facade operations `prepare_market_data`, `returns`,
 `cumulative_returns`, `equal_weights`, and `buy_and_hold` are implemented.
-`performance` remains proposed, along with future financing configuration and the
-plotting namespace. The full target workflow below uses a few
+`Financing` is implemented. `performance` and the plotting namespace remain
+proposed. The full target workflow below uses a few
 concrete policy/result types and the `plots` namespace. Avoid exporting internal
 helpers. Keyword-only policy arguments should carry meaningful names and units.
 
@@ -159,7 +161,7 @@ result = rt.buy_and_hold(
     policy=rt.BuyHoldPolicy(
         execution="entry_close", sizing="post_cost_equity",
         fractional_shares=True, initial_gross_leverage=1.0,
-        cash_sweep="repay_debt", terminal_action="mark_only",
+        terminal_action="mark_only",
     ),
     costs=rt.TradeCosts(
         commission_bps=commission_bps,
@@ -168,7 +170,7 @@ result = rt.buy_and_hold(
     financing=rt.Financing(
         cash_rate=cash_rate, borrowing_rate=borrowing_rate,
         day_count="ACT/365F", maintenance_equity_ratio=margin_ratio,
-        on_breach="stop",
+        on_breach="stop", cash_sweep="repay_debt",
     ),
 )
 report = rt.performance(

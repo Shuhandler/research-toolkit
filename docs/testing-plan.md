@@ -1,10 +1,10 @@
 # Testing plan and implemented checks
 
 Prioritize independent financial examples and ledger identities over coverage
-percentages or tests that mirror implementation. Milestone 1A/1B tests now cover
+percentages or tests that mirror implementation. Milestone 1A–1C tests now cover
 data validation, return arithmetic, entry costs, actions, cash interest, drift,
-scaling, and accounting identities using synthetic Polars tables and independent
-expected values. The leverage, metric, plotting, and research tests below remain
+scaling, leverage, financing, debt repayment, stopped runs, and accounting identities
+using synthetic Polars tables and independent expected values. Metric, plotting, and research tests below remain
 targets for their later phases. Run `python -m pytest -q`; network connections are
 blocked by the unit-test fixture.
 

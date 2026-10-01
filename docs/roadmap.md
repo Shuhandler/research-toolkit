@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Milestones 1A and 1B are implemented and tested; 1C and later phases remain
+Milestones 1A–1C are implemented and tested; 1D and later phases remain
 unimplemented. See [the API](api.md) and the runnable offline example. The first
 release is not complete until the financed, corporate-action-aware acceptance
 workflow passes.
@@ -46,7 +46,7 @@ An action table can be validated here before any simulator exists.
 receivables, and no-silent-rebalance tests pass with currency residual tolerances.
 This is an internal slice, not completion of the user's first milestone.
 
-### 1C. Borrowing, leverage, and financing — next
+### 1C. Borrowing, leverage, and financing — implemented
 
 - Extend the same ledger with explicit debt, initial leveraged sizing, daily
   calendar-date financing, debt-repayment sweep, and leverage drift.
@@ -59,7 +59,7 @@ This is an internal slice, not completion of the user's first milestone.
 return series. Financing charges and debt changes are separately inspectable.
 No successful full-period report can conceal a stopped run.
 
-### 1D. Performance, plots, and acceptance notebook
+### 1D. Performance, plots, and acceptance notebook — next
 
 - Add performance tables for P&L/returns, drawdowns, volatility, Sharpe, Sortino,
   return correlation and beta; record units, annualization, sample counts, and

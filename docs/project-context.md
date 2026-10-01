@@ -22,6 +22,7 @@ financial authority. Inspect its assumptions independently. Never modify it.
 | Borrowing and leverage included in the first milestone | User chose 3B |
 | Setup phase creates documentation and minimal scaffolding only; no financial functions | Initial request |
 | Implement milestones 1A and 1B; continue to defer 1C/1D | Follow-up user request after setup |
+| Implement milestone 1C; 1D remains next | Subsequent user request |
 | No publishing, GitHub push, or changes to the reference | Initial request |
 | Ask consequential questions in ordinary chat with recommended multiple-choice options | Initial request |
 | Narrative interpretation belongs in Markdown after inspecting outputs | Initial request |
@@ -70,19 +71,25 @@ These are explicit, revisable design choices, not additional user confirmations:
 
 ## Status and next step
 
-Milestones 1A and 1B are implemented: strict metadata/calendar/price/action
+Milestones 1A–1C are implemented: strict metadata/calendar/price/action
 validation, deterministic input identities, simple/log and cumulative returns,
-equal/custom weights, and an unlevered fractional-share ledger with entry costs,
-splits, dividend receivables/payments, cash interest, and reconciliations.
-An offline synthetic Python example and financial tests are included. No reference
+equal/custom weights, and a fractional-share ledger with entry costs, splits,
+dividend receivables/payments, cash interest, borrowing, financing charges,
+debt repayment, margin/insolvency stops, and reconciliations.
+Offline unlevered/financed Python examples and financial tests are included. No reference
 code was reused, market data downloaded, notebook created, package published, or
 GitHub changes pushed.
 
 Concrete interface refinements: `returns` takes validated `MarketData` so session
-gaps cannot bypass checks; `buy_and_hold` takes explicit `cash_rate` and
-`cash_day_count` until financed accounts are added. No placeholder `Financing`,
-`performance`, or plotting objects exist. See [the API](api.md).
+gaps cannot bypass checks. `buy_and_hold` accepts an explicit `Financing` object;
+the earlier `cash_rate`/`cash_day_count` pair remains valid for unlevered calls,
+but mixing the two configurations raises. The named `cash_sweep` belongs to
+`Financing`, rather than changing the existing execution policy. Stopped results
+retain the failure close, reason/time, and requested versus actual coverage;
+`require_complete()` guards full-period consumers. Margin equality uses a relative
+1e-12 roundoff tolerance, separate from currency reconciliation tolerances.
+These are engineering refinements of the accepted design. `performance` and plotting
+are not implemented. See [the API](api.md).
 
-Next is milestone 1C: borrowing, financed initial leverage, debt sweeps, and
-stop-on-margin-breach behavior through the same ledger. 1D will add performance
+Next is milestone 1D: performance
 metrics, benchmarks, plots, snapshot persistence, and the full acceptance notebook.

@@ -1,8 +1,8 @@
 # Financial conventions
 
-Milestones 1A and 1B implement the input/return conventions and unlevered account,
-entry-cost, split, dividend, and cash-interest rules below. Borrowing, margin
-stops, performance ratios, and later allocation methods remain proposed for their
+Milestones 1A–1C implement the input/return conventions, account funding,
+entry costs, splits, dividends, cash/borrowing interest, debt repayment, and margin
+stops below. Performance ratios and later allocation methods remain proposed for their
 roadmap phases. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
@@ -204,6 +204,13 @@ margin-ratio denominator. A configurable research threshold is not a representat
 of broker margin rules, intraday monitoring, or guaranteed liquidation prices.
 Real margin accounts involve borrowing and additional requirements, as described
 by [FINRA](https://www.finra.org/rules-guidance/key-topics/margin-accounts).
+
+Equality at the maintenance threshold is compliant. A relative tolerance of 1e-12
+handles floating-point roundoff in that comparison; it is not a currency tolerance.
+Stopped results include the failing session's balances, P&L, and costs, plus stop
+reason/time and actual ending session. No subsequent event, charge, or trade is
+processed. A breach on the requested final session still has stopped status.
+`BacktestResult.require_complete()` rejects such results for full-period use.
 
 At bankruptcy retain the last computable P&L and simple return from positive
 opening equity, even if the return is at or below −100%; log return and CAGR are

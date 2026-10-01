@@ -18,7 +18,7 @@ def _number(value, name, *, positive=False):
 
 @dataclass(frozen=True, kw_only=True)
 class BuyHoldPolicy:
-    """Required explicit policy. Milestone 1B supports initial exposure from 0 to 1.
+    """Required explicit policy; exposure above 1 requires Financing at simulation.
 
     Static weights must have been chosen before entry; fills are idealized at the
     declared closing price. There are no implicit rebalances or terminal sales.
@@ -35,8 +35,7 @@ class BuyHoldPolicy:
             raise ValueError("only entry_close execution and post_cost_equity sizing are supported")
         if self.fractional_shares is not True or self.terminal_action != "mark_only":
             raise ValueError("fractional_shares=True and terminal_action='mark_only' are required")
-        if _number(self.initial_gross_leverage, "initial_gross_leverage") > 1:
-            raise ValueError("borrowing/leverage above 1 requires milestone 1C")
+        _number(self.initial_gross_leverage, "initial_gross_leverage")
 
 
 def equal_weights(assets) -> pl.DataFrame:

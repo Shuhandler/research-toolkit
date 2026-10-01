@@ -11,7 +11,10 @@ schemas, provenance, sessions, and portfolio policies.
 - `test_backtest.py`: hand-calculated entry costs, splits, dividend entitlements,
   unpaid receivables, weekend payments/interest, cash-only/partial allocations,
   drifting weights, scaling, and independent ledger reconstruction.
+- `test_financing.py`: financed entry sizing, calendar-day debt capitalization,
+  dividend repayment, 1× equivalence, leverage drift, margin/insolvency stops,
+  coverage guards, and financed multi-asset reconstruction at $100 million.
 
-Borrowing, performance ratios, plots, and research workflow checks will be added
+Performance ratios, plots, and research workflow checks will be added
 with their implementations; see [the testing plan](../docs/testing-plan.md).
 The future five-stock notebook complements, but does not replace, accounting tests.

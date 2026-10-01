@@ -203,8 +203,8 @@ def test_invalid_run_config(market, run, kw):
 
 
 def test_reject_unimplemented_economics(inputs, run, policy):
-    with pytest.raises(ValueError, match="1C"):
-        policy(2)
+    with pytest.raises(ValueError, match="explicit Financing"):
+        run(rt.prepare_market_data(**inputs()), policy=policy(2))
     for basis in ["split_adjusted", "total_return_adjusted"]:
         with pytest.raises(ValueError, match="raw execution"):
             run(rt.prepare_market_data(**inputs(price_basis=basis)))
