@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local research snapshots and generated notebook reports
+/data/local/
+/artifacts/
+.DS_Store
