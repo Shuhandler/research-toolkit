@@ -9,7 +9,7 @@ with assumptions and diagnostics so you can check how the numbers were produced.
 import research_toolkit as rt
 ```
 
-The toolkit currently supports daily, long-only portfolios in one currency,
+The toolkit currently supports daily long-only and long/short portfolios in one currency,
 including leverage, dividends, splits, trading costs, and financing. You can run
 buy-and-hold, scheduled rebalancing, or strategies driven by dated signals.
 
@@ -39,8 +39,8 @@ dividend payment dates where applicable. It does not assume that a provider's
 | --- | --- |
 | `rt.equal_weights(...)` | Assigns an equal portfolio weight to each asset. |
 | `rt.inverse_volatility_weights(...)` | Gives lower-volatility assets more weight, using only data before the decision. Can reject or explicitly redistribute weights above a cap. |
-| `rt.buy_and_hold(...)` | Buys an initial portfolio and tracks holdings, cash, debt, dividends, costs, and equity. |
-| `rt.scheduled_rebalance(...)` | Trades toward dated target allocations, using the same accounting as buy-and-hold. |
+| `rt.buy_and_hold(...)` | Opens a portfolio from long weights, signed equity exposures, or exact signed quantities, then tracks its holdings and accounts. |
+| `rt.scheduled_rebalance(...)` | Trades toward dated allocations or signed position targets, using the same accounting as buy-and-hold. |
 | `rt.signal_targets(...)` | Converts dated allocation signals into targets for the next supplied session's close. |
 | `rt.risk_contributions(...)` | Estimates each asset's contribution to portfolio volatility. |
 | `result.require_complete()` | Raises an error if a backtest stopped before its requested end. |
@@ -65,7 +65,7 @@ actual trades. Automatic dividend reinvestment has zero trading costs.
 
 | Function | What it does |
 | --- | --- |
-| `rt.performance(...)` | Builds P&L, return, drawdown, risk, and optional benchmark reports from a backtest. |
+| `rt.performance(...)` | Reports P&L, returns, drawdowns, risk, and benchmark comparisons, including tracking error and information ratio. |
 | `rt.correlation(...)` | Calculates correlations between asset returns. |
 | `rt.rolling_risk(...)` | Calculates rolling volatility and Sharpe ratios, plus beta and correlation when a benchmark is supplied. |
 | `rt.risk_free_returns(...)` | Converts dated annual rate observations into holding-period risk-free returns using explicit day-count and compounding rules. |
@@ -103,7 +103,12 @@ Pass these objects to the relevant functions to make your assumptions explicit.
 | `rt.SquareRootImpactCosts(...)` | Size-dependent impact based on daily volatility and dollar ADV, plus commissions and spreads. |
 | `rt.Financing(...)` | Fixed borrowing and cash-interest rates, day counts, debt repayment, and margin limits. |
 | `rt.SOFRFinancing(...)` | Historical published SOFR plus a borrowing spread, with separately configured cash interest. |
+| `rt.LongShortPolicy(...)` | Sets restricted collateral, separate long/short margin requirements, and gross collateral interest. |
+| `rt.StockBorrow(...)` | Supplies annual borrow fees by asset, using fixed assumptions or dated rates. |
 | `rt.DividendReinvestment(...)` | Reinvestment of paid dividends into the paying asset, including debt-repayment priority. |
+
+Use exact `quantities=` to add a hedge without resizing existing long positions.
+See the [long/short guide](docs/long-short.md) and [runnable example](examples/long_short_hedge.py).
 
 SOFR financing needs supplied rates and a publication calendar. It accrues and
 capitalizes interest daily using information available at New York midnight;

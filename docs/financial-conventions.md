@@ -9,6 +9,10 @@ advanced allocation remain proposed. See [the API](api.md) for the exact support
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
 
+The original sections below describe the long-only account. The implemented
+[long/short convention](#longshort-accounting-extension) extends that account with
+restricted collateral, signed holdings and short dividend obligations.
+
 ## Units and return definitions
 
 Money is in the declared base currency, shares are quantities, and returns/rates
@@ -224,8 +228,9 @@ processed. A breach on the requested final session still has stopped status.
 At bankruptcy retain the last computable P&L and simple return from positive
 opening equity, even if the return is at or below −100%; log return and CAGR are
 undefined. Never clip losses to make charts or logarithms work. Short sales,
-stock-loan availability/fees, collateral, recalls, and payments in lieu of dividends
-are deferred. Reject negative weights until that separate accounting is supported.
+stock-loan fees, collateral and payments in lieu of dividends are now supported
+only through the explicit signed interface described below. Negative long-allocation
+`weights` remain invalid; recalls and borrow-availability verification remain deferred.
 
 ## Metrics, annualization, and undefined cases
 
@@ -538,3 +543,61 @@ on-change rebalancing holds quantities until the supplied instruction changes.
 Neither convention silently chooses the other. Calendar gaps do not create bars,
 and the terminal close remains mark-only. Signal-driven trades share all existing
 cost/funding/receivable/margin/DRIP accounting. See [the full guide](chronological-research.md).
+
+
+## Long/short accounting extension
+
+User-confirmed conventions: daily marked restricted collateral (choice 1A) and
+separate long/short maintenance requirements (choice 2A). These are research
+assumptions, not broker rules. Exact contracts and worked examples are in the
+[long/short guide](long-short.md).
+
+For long value `L`, absolute short value `S`, unrestricted cash `C`, restricted
+collateral `K`, dividend receivables `R`, dividend liabilities `D`, and borrowing `B`:
+
+- `E = L - S + C + K + R - D - B`.
+- `gross = L + S`, `net = L - S`, `leverage = gross/E` for positive equity.
+- `K = collateral_multiple * S` at each supplied close and after baskets;
+  the multiple is explicitly supplied and at least one.
+- Maintenance requires `E >= long_margin*L + short_margin*S`, with independently
+  supplied fractions. Equity/gross remains descriptive, not a second margin rule.
+
+Opening a short increases cash and the signed share liability equally, creating
+no P&L. Cash is segregated before any debt sweep. Daily collateral increases use
+free cash then the explicit loan; decreases release cash to the existing debt
+sweep. Extra collateral is an account asset, not an expense. A cover removes
+shares and releases collateral. The reported short liability is already included
+in signed market value; never subtract it twice. The same engine reconciles cash,
+restricted collateral, loans, quantities, dividend assets/liabilities, and P&L.
+
+Signed equity targets scale with positive post-cost equity; exact signed quantities
+never scale. Entry expenses reduce equity and can increase borrowing without
+altering exact long quantities. Fixed-bps and square-root/per-share costs apply to
+absolute actual trades once. Zero trades have no fees; crossing signs trades the
+full quantity difference. Existing `weights` and long-only sizing retain their rules.
+
+Every calendar date uses the previous supplied closing short market value for
+borrow fees, including weekends. Fixed annual asset assumptions or complete dated
+rates explicitly assigned to each date are required. Dated availability must be
+no later than New York midnight. ACT/360 or ACT/365F is explicit. Debit interest,
+free-cash interest, borrow fees, and gross collateral rebate are separate postings.
+Rebate applies to opening restricted collateral, including any excess above S;
+net-of-borrow-fee rebates are unsupported. No short-loan availability is inferred.
+
+Short dividends reduce equity and create a liability on the ex-date; payment
+reduces cash and the liability without another expense. They never reinvest.
+Signed splits preserve economic value. Existing long dividend reinvestment stays
+free of trading costs. If a previously entitled long payer is now short, its
+payment is released to cash rather than automatically covering the position.
+
+Session-close margin/insolvency checks occur before scheduled trades and again
+after execution. Stops retain the failure close and actual coverage; subsequent
+events stop. Returns divide by equity, not exposure or short proceeds. The failing
+simple return can be at/below -100%, while log returns/weights/leverage are null
+at nonpositive equity. No forced liquidation or broker-specific rescue is assumed.
+
+Information ratio uses `sqrt(A)*mean(r-b)/sample_std(r-b)` on exactly aligned
+holding intervals. Tracking error is `sqrt(A)*sample_std(r-b)`. No second risk-free
+subtraction occurs. At least two intervals are required; zero tracking error yields
+zero reported tracking error and null IR with its reason. A caller-supplied zero
+benchmark is valid and does not make beta against a constant benchmark defined.

@@ -135,9 +135,9 @@ and resumable audit. It is not a model-training/search framework.
 `signal_targets` maps dated long-only instructions to the next supplied session
 close. Each-signal versus on-change rebalancing is explicit. Passing its result to
 `scheduled_rebalance` preserves timing/source audits and uses the existing ledger,
-costs, financing, corporate actions, DRIP and stop rules. Long/short remains a
-separate subrelease requiring stock loan, dividend liabilities and collateral;
-negative weights still raise.
+costs, financing, corporate actions, DRIP and stop rules. The subsequent long/short
+subrelease implements stock borrow, dividend liabilities and collateral through
+explicit signed inputs; negative long-allocation weights still raise.
 
 **Acceptance:** future-value perturbations cannot alter earlier features, fitted
 training parameters or prior trades; no signal earns the move into its fill;
@@ -192,3 +192,19 @@ undefined metric statuses, partial-run/mismatch guards and provider adjustment
 semantics. Assignment notebook migration is intentionally a separate task; the
 private reference remains unchanged. Milestone 3 signals were implemented separately
 under the subsequent user request.
+
+
+## Long/short accounting extension — implemented
+
+The shared ledger supports signed post-cost equity exposures and exact quantities,
+fixed holdings and scheduled targets, marked restricted collateral, separate
+long/short margin requirements, fixed/dated borrow fees, gross collateral rebates,
+short dividends, and sign-crossing trade costs. Historical SOFR and cost-free long
+DRIP remain supported. Performance includes aligned information ratios.
+
+[Contracts and limitations](long-short.md) and the
+[offline hedge comparison](../examples/long_short_hedge.py) describe notebook use.
+Validation includes independent small P&L/funding examples, weekend rate changes,
+short corporate actions, partial covers, zero trades, insolvency/stopped reporting,
+and the existing long-only regression suite. Broker rules, recalls, locates,
+hedge selection and signed signal conversion are outside this extension.

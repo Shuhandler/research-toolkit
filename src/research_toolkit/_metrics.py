@@ -82,7 +82,7 @@ def _validated_run(result, allow_partial):
     expected_keys = [(daily["period_start"][0], "pre_entry"), (daily["period_start"][0], "post_entry")]
     scheduled = set(result.targets["session"].to_list()) if result.metadata.get("strategy") == "scheduled_rebalance" else set()
     reinvested = set(result.dividend_reinvestments.filter(
-        pl.col("status").is_in(["reinvested", "stopped_before_trade"]))["session"].to_list())
+        pl.col("status").is_in(["reinvested", "stopped_before_trade", "payer_now_short"]))["session"].to_list())
     for d in daily["session"]:
         if d in scheduled:
             expected_keys.append((d, "pre_rebalance"))
@@ -181,6 +181,12 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
              ("ending_leverage", daily["gross_leverage"][-1], "ratio", n,
               "ok" if daily["gross_leverage"][-1] is not None else "nonpositive_equity")]
     summary = pl.concat([summary, pl.DataFrame(extra, schema=METRIC_SCHEMA, orient="row")])
+    if meta.get("long_short") is not None:
+        summary = pl.concat([summary, pl.DataFrame([
+            ("stock_borrow_cost", result.costs.filter(pl.col("component") == "stock_borrow_fee")["amount"].sum(), currency, n, "ok"),
+            ("short_dividend_expense", -result.attribution.filter(pl.col("component") == "short_dividend_expense")["pnl"].sum(), currency, n, "ok"),
+            ("short_collateral_rebate", result.short_financing_accruals["rebate"].sum(), currency, n, "ok"),
+        ], schema=METRIC_SCHEMA, orient="row")])
     benchmark_summary = pl.DataFrame(schema=METRIC_SCHEMA)
     cumulative_rows = _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), r, "portfolio")
     rows = []
@@ -196,6 +202,12 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
         corr, beta, corr_status, beta_status = _pair(r, br)
         add("return_correlation", corr, "correlation", corr_status)
         add("beta", beta, "ratio", beta_status)
+        active = [x-y for x, y in zip(r, br)]
+        tracking = stdev(active) if n >= 2 else None
+        add("annualized_tracking_error", tracking*math.sqrt(a) if tracking is not None else None,
+            "fraction/sqrt(year)", "ok" if n >= 2 else "insufficient_samples")
+        add("information_ratio", math.sqrt(a)*mean(active)/tracking if tracking else None, "ratio",
+            "insufficient_samples" if n < 2 else "zero_tracking_error" if not tracking else "ok")
         wealth = [meta["initial_capital"]]
         for value in br:
             wealth.append(wealth[-1]*(1+value))
@@ -211,6 +223,10 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
         benchmark_summary = pl.concat([benchmark_summary, pl.DataFrame([
             ("return_correlation", self_corr, "correlation", n, self_corr_status),
             ("beta", self_beta, "ratio", n, self_beta_status),
+            ("annualized_tracking_error", 0. if n >= 2 else None, "fraction/sqrt(year)", n,
+                "ok" if n >= 2 else "insufficient_samples"),
+            ("information_ratio", None, "ratio", n,
+                "zero_tracking_error" if n >= 2 else "insufficient_samples"),
             ("entry_cost", 0., currency, n, "not_modeled"),
             ("financing_cost", 0., currency, n, "not_modeled")], schema=METRIC_SCHEMA, orient="row")])
         cumulative_rows += _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), br, "benchmark")
@@ -224,9 +240,12 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
     # receivables complete the balance sheet. No hidden normalization in plots.
     allocation = result.positions.select("session", (pl.lit("asset:")+pl.col("asset")).alias("component"), "weight")
     balances = result.valuations.filter(pl.col("phase").is_in(["post_entry", "close"]))
-    for col in ("cash", "debt", "dividend_receivable"):
+    account_columns = ["cash", "debt", "dividend_receivable"]
+    if meta.get("long_short") is not None:
+        account_columns += ["restricted_collateral", "dividend_liability"]
+    for col in account_columns:
         allocation = pl.concat([allocation, balances.select("session", pl.lit(f"account:{col}").alias("component"),
-            pl.when(pl.col("equity") > 0).then(pl.col(col)/pl.col("equity")*(-1 if col == "debt" else 1))
+            pl.when(pl.col("equity") > 0).then(pl.col(col)/pl.col("equity")*(-1 if col in {"debt", "dividend_liability"} else 1))
             .otherwise(None).alias("weight"))])
     attribution = result.attribution.group_by("component").agg(pl.col("pnl").sum()).sort("component")
     if not math.isclose(attribution["pnl"].sum(), daily["pnl"].sum(), rel_tol=1e-10, abs_tol=1e-8):
@@ -237,6 +256,7 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
                 ddof=1, sortino_denominator="all_observations", alignment=alignment,
                 annualization="sqrt_periods_per_year_no_serial_correlation_adjustment",
                 n_obs=n, benchmark=bm_meta, allow_partial=allow_partial,
+                information_ratio_convention="sqrt_periods_per_year_mean_active_return_over_sample_std_active_return",
                 drawdown_basis=("pre_entry_post_entry_pre_trade_and_session_closes"
                     if meta.get("dividend_reinvestment") is not None else
                     "pre_entry_post_entry_pre_rebalance_and_session_closes"

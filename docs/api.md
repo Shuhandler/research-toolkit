@@ -12,11 +12,17 @@ Result/configuration objects are concrete dataclasses; their tables are Polars
 DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Short positions, next-open/intraday execution, fixed/minimum ticket fees, provider
+Next-open/intraday execution, fixed/minimum ticket fees, provider
 downloads and walk-forward model research remain unimplemented. Milestone 3
 supports daily long-only signal targets and chronological research; see
 [the complete research API](chronological-research.md). Future
 extensions in [architecture](architecture.md) are labeled separately.
+
+Signed positions are supported through `buy_and_hold` and `scheduled_rebalance`
+with `LongShortPolicy` and `StockBorrow`. See [long/short contracts and notebook
+migration](long-short.md) for signed schemas, collateral, borrow fees, dividends,
+margin, new result fields, and information ratios. The allocation/financing sections
+below describe the original long-only mode unless stated otherwise.
 
 ## Validate market data
 
@@ -365,6 +371,9 @@ for leveraged portfolios. Dollar attribution is realized ledger attribution, not
 covariance risk contributions. Result tables/dictionaries remain mutable: treat
 reports as immutable inputs to plots, and create a new report after changing a run.
 
+Signed runs additionally report `stock_borrow_cost`, `short_dividend_expense`, and
+`short_collateral_rebate`; the existing `financing_cost` remains debit interest.
+
 Summary metrics: `ending_equity`, `cumulative_pnl` (declared currency),
 `cumulative_simple_return`, `compounded_return`, `max_drawdown` (fractions),
 `annualized_arithmetic_mean` (fraction/year), `annualized_volatility`
@@ -379,6 +388,11 @@ are supported as an exclusive alternative to the annual scalar; see
 observations, not only losing observations. Ratios use square-root annualization.
 This is a sampling assumption, not a correction for serial correlation. CAGR and
 drawdown durations are not implemented.
+
+Benchmark metrics also include `information_ratio` and `annualized_tracking_error`
+from exactly aligned active returns with sample `ddof=1` and explicit annualization.
+Zero tracking error gives null IR with `zero_tracking_error`; a zero-return
+benchmark is valid. See [definitions](long-short.md#results-reports-and-plots).
 
 Benchmark metrics: `return_correlation` (Pearson), `beta` (intercept regression
 slope of portfolio on benchmark), `benchmark_compounded_return` (fraction),

@@ -1,5 +1,6 @@
 """Auditable daily research, allocation and financed portfolio accounting."""
 
+from ._shorts import LongShortPolicy, StockBorrow
 from ._research import lagged_features, chronological_split, standardize
 from ._research_eval import ResearchStudy
 from ._signals import signal_targets
@@ -25,6 +26,7 @@ from . import plots, adapters
 from ._returns import cumulative_returns, returns
 
 __all__ = [
+    "LongShortPolicy", "StockBorrow",
     "lagged_features", "chronological_split", "standardize", "ResearchStudy", "signal_targets",
     "FeatureResult", "ResearchSplit", "ResearchSelection", "ResearchEvaluation", "SignalResult",
     "SquareRootImpactCosts", "estimate_liquidity", "estimate_trade_costs", "size_entry_orders",

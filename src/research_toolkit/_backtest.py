@@ -10,6 +10,7 @@ import platform
 
 import polars as pl
 
+from ._shorts import LongShortPolicy, StockBorrow, _signed, _signed_targets, _signed_size, _borrow_plan, _cutoff
 from ._costs import TradeCosts
 from ._execution import SquareRootImpactCosts, COST_SCHEMA, _entry_size, _impact_basket
 from ._data import _validated_market
@@ -31,12 +32,19 @@ except PackageNotFoundError:
 F, S, D, I = pl.Float64, pl.String, pl.Date, pl.Int64
 UTC = pl.Datetime("us", "UTC")
 SCHEMAS = {
+    "stock_borrow_accruals": {"date": D, "asset": S, "mark_session": D, "cutoff_at": UTC,
+        "available_at": UTC, "short_market_value": F, "annual_rate": F, "day_fraction": F, "amount": F},
+    "short_financing_accruals": {"date": D, "opening_collateral": F, "rebate_rate": F,
+        "day_fraction": F, "rebate": F},
+    "dividend_liabilities": {"session": D, "action_id": S, "asset": S, "ex_session": D,
+        "pay_date": D, "entitled_quantity": F, "amount": F, "outstanding": F},
     "signal_audit": {**SIGNAL_AUDIT_SCHEMA, "status": pl.String},
     "execution_costs": {"trade_id": S, "session": D, **COST_SCHEMA},
     "daily": {"session": D, "period_start": D, "opening_equity": F, "equity": F,
               "pnl": F, "simple_return": F, "log_return": F, "cumulative_pnl": F,
               "cumulative_simple_return": F, "compounded_return": F, "cash": F,
-              "debt": F, "dividend_receivable": F, "gross_exposure": F,
+              "debt": F, "dividend_receivable": F, "dividend_liability": F, "restricted_collateral": F,
+              "long_exposure": F, "short_exposure": F, "short_liability": F, "margin_required": F, "gross_exposure": F,
               "net_exposure": F, "gross_leverage": F, "drawdown": F,
               "equity_ratio": F, "margin_breached": pl.Boolean,
               "includes_entry_costs": pl.Boolean},
@@ -50,9 +58,10 @@ SCHEMAS = {
     "events": {"event_id": S, "date": D, "time": UTC, "sequence": I, "phase": S,
                "type": S, "asset": S, "action_id": S, "trade_id": S,
                "quantity_delta": F, "cash_delta": F, "debt_delta": F,
-               "receivable_delta": F},
+               "receivable_delta": F, "collateral_delta": F, "dividend_liability_delta": F},
     "valuations": {"session": D, "time": UTC, "phase": S, "market_value": F,
-                   "cash": F, "debt": F, "dividend_receivable": F, "equity": F},
+                   "cash": F, "debt": F, "dividend_receivable": F, "dividend_liability": F,
+                   "restricted_collateral": F, "short_liability": F, "equity": F},
     "attribution": {"session": D, "component": S, "asset": S, "pnl": F},
     "receivables": {"session": D, "action_id": S, "asset": S, "ex_session": D,
                     "pay_date": D, "entitled_quantity": F, "amount": F, "outstanding": F},
@@ -84,7 +93,9 @@ def _check(actual, expected, scale, context):
     return residual, tolerance
 
 
-def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date,
+def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None,
+                 long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None,
+                 initial_capital: float, entry_session: date,
                  end_session: date, policy: BuyHoldPolicy, costs: TradeCosts | SquareRootImpactCosts,
                  cash_rate: float | None = None, cash_day_count: str | None = None,
                  financing: Financing | SOFRFinancing | None = None,
@@ -101,20 +112,30 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
     Entry costs reduce the first holding interval's P&L, whose denominator is
     original capital. Dividends accrue on ex-date and pay on their actual date.
 
+    Supply exactly one of ``weights`` (existing nonnegative risky proportions),
+    ``equity_exposures`` (signed multiples of post-cost equity), or ``quantities``
+    (exact signed shares). The latter two require LongShortPolicy, StockBorrow,
+    explicit financing, and policy.initial_gross_leverage=1. Exact shares are never
+    rescaled to pay costs. Restricted collateral cannot fund the long holdings.
+
     All results are numerical Polars tables. See ``docs/api.md`` for the complete
     input and output contracts. This function performs no network or file I/O.
     """
     return _simulate(market, weights=weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
         cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing,
-        dividend_reinvestment=dividend_reinvestment)
+        dividend_reinvestment=dividend_reinvestment, equity_exposures=equity_exposures,
+        quantities=quantities, long_short=long_short, stock_borrow=stock_borrow)
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
                         policy: RebalancePolicy, costs: TradeCosts | SquareRootImpactCosts, financing: Financing | SOFRFinancing,
-                        dividend_reinvestment: DividendReinvestment | None = None):
-    """Execute explicit dated long-only targets through the shared daily ledger.
+                        dividend_reinvestment: DividendReinvestment | None = None,
+                        long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None):
+    """Execute dated long-only or explicitly signed targets through the shared ledger.
 
+    Signed targets require long_short and stock_borrow and use equity_exposure
+    or quantity columns. Existing long-only target schemas remain unchanged.
     Target decisions precede execution, every basket includes zero-weight exits,
     and no trade executes on the terminal session. See docs/api.md for schemas,
     receivable funding rules, turnover denominators, and research margin stops.
@@ -123,6 +144,21 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
         raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing or SOFRFinancing")
     policy.__post_init__()
     market = _validated_market(market)
+    if long_short is not None:
+        if policy.receivable_policy != "require_target":
+            raise ValueError("signed targets require receivable_policy='require_target'; declared loans fund unavailable receivables")
+        table, plans, kind = _signed_targets(targets, market, entry_session, end_session)
+        first, _, _ = plans[entry_session]
+        initial_policy = BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
+            fractional_shares=True, initial_gross_leverage=1., terminal_action="mark_only")
+        return _simulate(market, weights=None, initial_capital=initial_capital,
+            entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
+            financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
+            dividend_reinvestment=dividend_reinvestment, long_short=long_short, stock_borrow=stock_borrow,
+            equity_exposures=first if kind == "equity_exposure" else None,
+            quantities=first if kind == "quantity" else None)
+    if stock_borrow is not None:
+        raise ValueError("stock_borrow requires long_short")
     signals = _checked_signals(targets, market, entry_session, end_session) if isinstance(targets, SignalResult) else None
     table, plans = _targets(signals.targets if signals else targets, market, entry_session, end_session, policy)
     first_weights, first_leverage, _ = plans[entry_session]
@@ -143,8 +179,22 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
 
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
               costs, cash_rate=None, cash_day_count=None, financing=None,
-              schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None):
+              schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None,
+              equity_exposures=None, quantities=None, long_short=None, stock_borrow=None):
     market = _validated_market(market)
+    signed = long_short is not None
+    if sum(v is not None for v in (weights, equity_exposures, quantities)) != 1:
+        raise ValueError("supply exactly one of weights, equity_exposures or quantities")
+    if signed:
+        if not isinstance(long_short, LongShortPolicy) or weights is not None:
+            raise ValueError("LongShortPolicy requires signed equity_exposures or quantities, not long-allocation weights")
+        long_short.__post_init__()
+        if not isinstance(financing, (Financing, SOFRFinancing)) or not isinstance(policy, BuyHoldPolicy) or policy.initial_gross_leverage != 1.:
+            raise ValueError("signed sizing requires financing and policy.initial_gross_leverage=1; exposures/quantities set the size")
+        if financing.maintenance_equity_ratio is not None:
+            raise ValueError("signed margin uses LongShortPolicy; set financing.maintenance_equity_ratio=None")
+    elif equity_exposures is not None or quantities is not None or stock_borrow is not None:
+        raise ValueError("signed inputs require LongShortPolicy and StockBorrow")
     if market.metadata["price_basis"] != "raw":
         raise ValueError("buy_and_hold requires raw execution prices")
     if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, (TradeCosts, SquareRootImpactCosts)):
@@ -195,10 +245,18 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         sofr_plan, financing_metadata = _sofr_plan(financing, entry_session, end_session, market.metadata["currency"])
     else:
         financing_metadata = asdict(financing) if financing else None
-    allocation = _weights(weights, market.prices["asset"].unique().to_list())
+    signed_kind = "quantity" if quantities is not None else "equity_exposure"
+    allocation = (_signed(quantities if quantities is not None else equity_exposures,
+        market.prices["asset"].unique().to_list(), signed_kind) if signed else
+        _weights(weights, market.prices["asset"].unique().to_list()))
+    borrow_plan, borrow_metadata = {}, None
+    if signed:
+        short_assets = sorted({a for basket in ([p[0] for p in schedule.values()] if schedule else [allocation])
+                               for a, v in basket.items() if v < 0})
+        borrow_plan, borrow_metadata = _borrow_plan(stock_borrow, short_assets, entry_session, end_session)
     assets = sorted(allocation)
     total_weight = math.fsum(allocation.values())
-    resolved_weights = {a: allocation[a] / total_weight for a in assets}
+    resolved_weights = allocation.copy() if signed else {a: allocation[a] / total_weight for a in assets}
     dates = [d for d in all_sessions if entry_session <= d <= end_session]
     closes = dict(market.sessions.select("session", "close_at").iter_rows())
     prices = {(d, a): p for d, a, p in market.prices.iter_rows()}
@@ -208,7 +266,9 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     if impact_costs:
         entry_binding = costs._bind(assets, {a: prices[entry_session, a] for a in assets},
             entry_session, schedule[entry_session][2] if schedule else None, market.metadata["currency"])
-        gross = _entry_size(capital, exposure, resolved_weights, entry_binding)
+        gross = 0. if signed else _entry_size(capital, exposure, resolved_weights, entry_binding)
+    elif signed:
+        gross = 0.
     else:
         fee_rate = math.fsum(resolved_weights[a] * math.fsum(rates[c][a] for c in rates) for a in assets)
         gross = capital * exposure / (1 + exposure * fee_rate)
@@ -228,20 +288,23 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         for day, (target_weights, target_leverage, decision) in schedule.items():
             if impact_costs:
                 costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"])
-            else:
+            elif not signed:
                 _basket({a: 0. for a in assets}, capital, 0., target_weights,
                         target_leverage, rates, rebalance_policy.receivable_policy)
     quantity = {a: 0.0 for a in assets}
     cash = capital
     debt = 0.0
+    collateral = 0.0
+    liabilities = {}
     receivables = {}
     reinvestment_rows, reinvestment_budgets = {}, {}
     pending_pnl = defaultdict(list)
     cash_deltas, receivable_deltas, debt_deltas = [], [], []
+    collateral_deltas, liability_deltas = [], []
     quantity_deltas = defaultdict(list)
 
     def event(day, kind, *, phase="before_close", asset=None, action_id=None,
-              trade_id=None, dq=0.0, dc=0.0, dr=0.0, dd=0.0):
+              trade_id=None, dq=0.0, dc=0.0, dr=0.0, dd=0.0, dk=0.0, dl=0.0):
         seq = len(records["events"])
         records["events"].append({
             "event_id": f"E{seq:06d}", "date": day,
@@ -249,8 +312,10 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             "sequence": seq, "phase": phase, "type": kind, "asset": asset,
             "action_id": action_id, "trade_id": trade_id,
             "quantity_delta": dq, "cash_delta": dc, "debt_delta": dd,
-            "receivable_delta": dr,
+            "receivable_delta": dr, "collateral_delta": dk, "dividend_liability_delta": dl,
         })
+        collateral_deltas.append(dk)
+        liability_deltas.append(dl)
         cash_deltas.append(dc)
         receivable_deltas.append(dr)
         debt_deltas.append(dd)
@@ -261,21 +326,28 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         values = {a: quantity[a] * prices[day, a] for a in assets}
         mv = math.fsum(values.values())
         receivable = math.fsum(item["outstanding"] for item in receivables.values())
-        equity = math.fsum([mv, cash, receivable, -debt])
-        if (not all(math.isfinite(v) for v in (mv, cash, receivable, debt, equity))
-                or min(cash, receivable, debt) < 0):
+        liability = math.fsum(item["outstanding"] for item in liabilities.values())
+        equity = math.fsum([mv, cash, collateral, receivable, -liability, -debt])
+        if (not all(math.isfinite(v) for v in (mv, cash, collateral, receivable, liability, debt, equity))
+                or min(cash, collateral, receivable, liability, debt) < 0):
             raise ArithmeticError("ledger produced invalid balances")
         if phase in {"pre_entry", "post_entry"} and equity <= 0:
             raise ValueError("initial equity after costs must be positive")
         records["valuations"].append({"session": day, "time": closes[day], "phase": phase,
                                       "market_value": mv, "cash": cash, "debt": debt,
-                                      "dividend_receivable": receivable, "equity": equity})
+                                      "dividend_receivable": receivable, "dividend_liability": liability,
+                                      "restricted_collateral": collateral, "short_liability": sum(max(-v, 0.) for v in values.values()), "equity": equity})
         checks = {
             "cash_reconciliation": (cash, math.fsum([capital, *cash_deltas])),
             "receivable_reconciliation": (receivable, math.fsum(receivable_deltas)),
             "debt_reconciliation": (debt, math.fsum(debt_deltas)),
-            "balance_sheet": (equity, math.fsum([*values.values(), cash, receivable, -debt])),
+            "collateral_reconciliation": (collateral, math.fsum(collateral_deltas)),
+            "dividend_liability_reconciliation": (liability, math.fsum(liability_deltas)),
+            "balance_sheet": (equity, math.fsum([*values.values(), cash, collateral, receivable, -liability, -debt])),
         }
+        if signed:
+            checks["marked_collateral"] = (collateral, long_short.collateral_multiple *
+                math.fsum(max(-v, 0.) for v in values.values()))
         for a in assets:
             if not math.isclose(quantity[a], math.fsum(quantity_deltas[a]), rel_tol=1e-12, abs_tol=1e-12):
                 raise ArithmeticError(f"quantity reconciliation failed for {a}")
@@ -285,61 +357,168 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                                             "residual": residual, "tolerance": tolerance})
         return values, receivable, equity
 
-    balances(entry_session, "pre_entry")
-    entry_plan = []
-    for asset in assets:
-        notional = gross * resolved_weights[asset]
-        if notional == 0:
-            continue
-        mark = prices[entry_session, asset]
-        qty = notional / mark
-        if not math.isfinite(qty) or qty <= 0:
-            raise ValueError(f"initial quantity is not representable for {asset}")
-        components = entry_binding.components(asset, notional) if impact_costs else {c: notional * rates[c][asset] for c in rates}
-        cost = math.fsum(components.values())
-        entry_plan.append((asset, notional, mark, qty, components, cost))
-    entry_cost = math.fsum(item[5] for item in entry_plan)
-    entry_notional = math.fsum(item[1] for item in entry_plan)
-    # Fund the whole order basket before any trade event; borrowing is not profit.
-    if exposure > 1:
-        debt = max(math.fsum([entry_notional, entry_cost, -capital]), 0.0)
-        if not math.isfinite(debt) or debt <= 0:
-            raise ValueError("initial borrowing is not representable")
-        cash += debt
-        event(entry_session, "borrowing", phase="entry_close", dc=debt, dd=debt)
-    for asset, notional, mark, qty, components, cost in entry_plan:
-        trade_id = f"T{len(records['trades']):06d}"
-        if impact_costs:
-            records["execution_costs"].append(dict(entry_binding.row(asset, notional), trade_id=trade_id, session=entry_session))
-        quantity[asset] = qty
-        event(entry_session, "trade", phase="entry_close", asset=asset,
-              trade_id=trade_id, dq=qty, dc=-notional)
-        records["trades"].append({"trade_id": trade_id, "session": entry_session,
-                                    "time": closes[entry_session], "asset": asset,
-                                    "signed_quantity": qty, "reference_price": mark,
-                                    "signed_notional": notional, "execution": policy.execution,
-                                    "trade_cost": cost})
-        for component, amount in components.items():
-            if amount == 0:
+    def fund(day, amount, phase="before_close"):
+        nonlocal cash, debt
+        if amount > 0:
+            cash += amount
+            debt += amount
+            event(day, "borrowing", phase=phase, dc=amount, dd=amount)
+
+    def available_cash():
+        return max(0., cash-math.fsum(reinvestment_budgets.values()))
+
+    def mark_collateral(day, values, phase="close"):
+        nonlocal cash, collateral
+        required = long_short.collateral_multiple * math.fsum(max(-v, 0.) for v in values.values())
+        change = required-collateral
+        fund(day, max(change-available_cash(), 0.), phase)
+        cash -= change
+        collateral = required
+        if change:
+            event(day, "collateral_transfer", phase=phase, dc=-change, dk=change)
+
+    def margin_required(values):
+        return (long_short.long_margin*math.fsum(max(v, 0.) for v in values.values()) +
+                long_short.short_margin*math.fsum(max(-v, 0.) for v in values.values()))
+
+    def breached(values, equity):
+        if signed:
+            return _below_margin(equity, margin_required(values))
+        gross_value = math.fsum(values.values())
+        return _below_margin(equity/gross_value if gross_value else None, threshold)
+
+    def signed_basket(day, values, equity, targets, phase, decision=None):
+        nonlocal cash, debt, collateral
+        marks = {a: prices[day, a] for a in assets}
+        binding = costs._bind(assets, marks, day, decision, market.metadata["currency"]) if impact_costs else None
+        def components(a, n):
+            return binding.components(a, n) if binding else {c: abs(n)*rates[c][a] for c in rates}
+        def marginal(a, n):
+            return binding.marginal(a, n) if binding else math.fsum(rates[c][a] for c in rates)
+        changes, fee = _signed_size(values, equity, targets, signed_kind, marks, components, marginal)
+        new_values = {a: values[a]+changes[a] for a in assets}
+        after = equity-fee
+        if not all(math.isfinite(v) for v in [after, *new_values.values(), *changes.values()]) or after <= 0:
+            raise ValueError("signed basket equity/positions are not representable")
+        gross_value = math.fsum(abs(v) for v in new_values.values())
+        if rebalance_policy and gross_value and any(abs(v)/gross_value > rebalance_policy.max_asset_weight+1e-12 for v in new_values.values()):
+            raise ValueError("signed target exceeds max_asset_weight as a share of gross exposure")
+        if phase == "entry_close" and breached(new_values, after):
+            raise ValueError("signed entry violates long/short margin requirements")
+        # Release collateral only within this atomic basket, then segregate the new
+        # marked requirement before any debt sweep. Sale proceeds never enter a sweep.
+        if collateral:
+            cash += collateral
+            event(day, "collateral_release_for_basket", phase=phase, dc=collateral, dk=-collateral)
+            collateral = 0.
+        required = long_short.collateral_multiple*math.fsum(max(-v, 0.) for v in new_values.values())
+        fund(day, max(math.fsum([*changes.values(), fee, required, -cash]), 0.), phase)
+        for a in sorted(assets, key=lambda a: (changes[a] >= 0, a)):
+            n = changes[a]
+            if not n:
                 continue
-            records["costs"].append({"cost_id": f"C{len(records['costs']):06d}",
-                                     "date": entry_session, "time": closes[entry_session],
-                                     "trade_id": trade_id, "asset": asset,
-                                     "component": component, "amount": amount, "basis": "modeled"})
-            event(entry_session, component, phase="entry_close", asset=asset,
-                  trade_id=trade_id, dc=-amount)
-            pending_pnl[component, asset].append(-amount)
-    cash = math.fsum([capital, debt, -entry_notional, -entry_cost])
-    # At full investment, only floating-point subtraction can leave residual cash.
-    if exposure >= 1 or cash < 0:
-        residual, tolerance = _check(cash, 0.0, capital, "entry_cash_roundoff")
-        cash = 0.0
-        records["diagnostics"].append({"session": entry_session, "code": "entry_cash_roundoff",
-                                       "residual": residual, "tolerance": tolerance})
+            delta = -quantity[a] if new_values[a] == 0 else n/marks[a]
+            quantity[a] += delta
+            if not math.isfinite(quantity[a]):
+                raise ValueError("signed quantity is not representable")
+            trade_id = f"T{len(records['trades']):06d}"
+            parts = components(a, n)
+            charge = math.fsum(parts.values())
+            cash -= n+charge
+            event(day, "trade", phase=phase, asset=a, trade_id=trade_id, dq=delta, dc=-n)
+            records["trades"].append(dict(trade_id=trade_id, session=day, time=closes[day], asset=a,
+                signed_quantity=delta, reference_price=marks[a], signed_notional=n,
+                execution="entry_close" if phase == "entry_close" else "scheduled_close", trade_cost=charge))
+            if binding:
+                records["execution_costs"].append(dict(binding.row(a, n), trade_id=trade_id, session=day))
+            for component, amount in parts.items():
+                if amount:
+                    records["costs"].append(dict(cost_id=f"C{len(records['costs']):06d}", date=day,
+                        time=closes[day], trade_id=trade_id, asset=a, component=component, amount=amount, basis="modeled"))
+                    event(day, component, phase=phase, asset=a, trade_id=trade_id, dc=-amount)
+                    pending_pnl[component, a].append(-amount)
+        mark_collateral(day, new_values, phase)
+        # Roundoff is reconciled before normalization; all material deficits fail.
+        if cash < 0:
+            _check(cash, 0., capital, "signed_cash_roundoff")
+            cash = 0.
+        repayment = min(cash, debt)
+        if repayment:
+            cash -= repayment
+            debt -= repayment
+            event(day, "debt_repayment", phase=phase, dc=-repayment, dd=-repayment)
+        actual_equity = math.fsum([*(quantity[a]*marks[a] for a in assets), cash, collateral,
+            math.fsum(v["outstanding"] for v in receivables.values()),
+            -math.fsum(v["outstanding"] for v in liabilities.values()), -debt])
+        residual, tolerance = _check(actual_equity, after, max(capital, equity), "signed_basket_cost_equity")
+        records["diagnostics"].append(dict(session=day, code="signed_basket_cost_equity", residual=residual, tolerance=tolerance))
+        traded = math.fsum(abs(n) for n in changes.values())
+        records["turnover"].append(dict(session=day, phase="entry" if phase == "entry_close" else "rebalance",
+            gross_traded_notional=traded, equity_before=equity, turnover=traded/equity))
+        if phase != "entry_close":
+            records["rebalances"].append(dict(session=day, decision_session=decision, equity_before=equity,
+                equity_after=after, target_gross_leverage=math.fsum(abs(v) for v in targets.values()) if signed_kind == "equity_exposure" else None,
+                actual_gross_leverage=gross_value/after, trade_cost=fee, gross_traded_notional=traded, receivable_reserved=0.))
+        return fee
+
+    balances(entry_session, "pre_entry")
+    if signed:
+        entry_cost = signed_basket(entry_session, {a: 0. for a in assets}, capital, allocation,
+            "entry_close", schedule[entry_session][2] if schedule else None)
+    else:
+        entry_plan = []
+        for asset in assets:
+            notional = gross * resolved_weights[asset]
+            if notional == 0:
+                continue
+            mark = prices[entry_session, asset]
+            qty = notional / mark
+            if not math.isfinite(qty) or qty <= 0:
+                raise ValueError(f"initial quantity is not representable for {asset}")
+            components = entry_binding.components(asset, notional) if impact_costs else {c: notional * rates[c][asset] for c in rates}
+            cost = math.fsum(components.values())
+            entry_plan.append((asset, notional, mark, qty, components, cost))
+        entry_cost = math.fsum(item[5] for item in entry_plan)
+        entry_notional = math.fsum(item[1] for item in entry_plan)
+        # Fund the whole order basket before any trade event; borrowing is not profit.
+        if exposure > 1:
+            debt = max(math.fsum([entry_notional, entry_cost, -capital]), 0.0)
+            if not math.isfinite(debt) or debt <= 0:
+                raise ValueError("initial borrowing is not representable")
+            cash += debt
+            event(entry_session, "borrowing", phase="entry_close", dc=debt, dd=debt)
+        for asset, notional, mark, qty, components, cost in entry_plan:
+            trade_id = f"T{len(records['trades']):06d}"
+            if impact_costs:
+                records["execution_costs"].append(dict(entry_binding.row(asset, notional), trade_id=trade_id, session=entry_session))
+            quantity[asset] = qty
+            event(entry_session, "trade", phase="entry_close", asset=asset,
+                  trade_id=trade_id, dq=qty, dc=-notional)
+            records["trades"].append({"trade_id": trade_id, "session": entry_session,
+                                        "time": closes[entry_session], "asset": asset,
+                                        "signed_quantity": qty, "reference_price": mark,
+                                        "signed_notional": notional, "execution": policy.execution,
+                                        "trade_cost": cost})
+            for component, amount in components.items():
+                if amount == 0:
+                    continue
+                records["costs"].append({"cost_id": f"C{len(records['costs']):06d}",
+                                         "date": entry_session, "time": closes[entry_session],
+                                         "trade_id": trade_id, "asset": asset,
+                                         "component": component, "amount": amount, "basis": "modeled"})
+                event(entry_session, component, phase="entry_close", asset=asset,
+                      trade_id=trade_id, dc=-amount)
+                pending_pnl[component, asset].append(-amount)
+        cash = math.fsum([capital, debt, -entry_notional, -entry_cost])
+        # At full investment, only floating-point subtraction can leave residual cash.
+        if exposure >= 1 or cash < 0:
+            residual, tolerance = _check(cash, 0.0, capital, "entry_cash_roundoff")
+            cash = 0.0
+            records["diagnostics"].append({"session": entry_session, "code": "entry_cash_roundoff",
+                                           "residual": residual, "tolerance": tolerance})
     previous_values, outstanding, post_entry_equity = balances(entry_session, "post_entry")
     _check(post_entry_equity, capital - entry_cost, capital, "entry_cost_equity")
-    actual_gross = math.fsum(previous_values.values())
-    if actual_gross and _below_margin(post_entry_equity / actual_gross, threshold):
+    if breached(previous_values, post_entry_equity):
         raise ValueError("funded entry violates maintenance_equity_ratio")
 
     def position_rows(day, values, equity):
@@ -350,13 +529,17 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                                           "weight": values[asset] / equity if equity > 0 else None})
 
     position_rows(entry_session, previous_values, post_entry_equity)
-    records["turnover"].append({"session": entry_session, "phase": "entry",
-        "gross_traded_notional": entry_notional, "equity_before": capital,
-        "turnover": entry_notional/capital})
+    if not signed:
+        records["turnover"].append({"session": entry_session, "phase": "entry",
+            "gross_traded_notional": entry_notional, "equity_before": capital,
+            "turnover": entry_notional/capital})
 
     def rebalance(day, values, outstanding, equity):
         nonlocal cash, debt
         target_weights, target_leverage, decision = schedule[day]
+        if signed:
+            signed_basket(day, values, equity, target_weights, "rebalance_close", decision)
+            return
         binding = costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"]) if impact_costs else None
         if impact_costs:
             changes, cost = _impact_basket(values, equity, outstanding, target_weights,
@@ -479,6 +662,9 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         for action_id, budget in reinvestment_budgets.items():
             row = reinvestment_rows[action_id]
             asset = row["asset"]
+            if quantity[asset] < 0:
+                row.update(session=day, cash_released=budget, status="payer_now_short")
+                continue
             # User-selected DRIP convention: no commission, spread or impact.
             # Ordinary entry and scheduled trades retain their configured costs.
             notional = budget
@@ -502,7 +688,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             _check(cash, 0., max(capital, equity), "reinvestment_cash_roundoff")
             cash = 0.
         outstanding = math.fsum(item["outstanding"] for item in receivables.values())
-        after = math.fsum([*(quantity[a]*prices[day, a] for a in assets), cash, outstanding, -debt])
+        after = math.fsum([*(quantity[a]*prices[day, a] for a in assets), cash, collateral, outstanding,
+            -math.fsum(v["outstanding"] for v in liabilities.values()), -debt])
         residual, tolerance = _check(after, equity, max(capital, equity), "reinvestment_equity_neutrality")
         records["diagnostics"].append({"session": day, "code": "reinvestment_equity_neutrality",
                                        "residual": residual, "tolerance": tolerance})
@@ -510,6 +697,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         records["turnover"].append({"session": day, "phase": "dividend_reinvestment",
             "gross_traded_notional": traded, "equity_before": equity, "turnover": traded/equity})
         reinvestment_budgets.clear()
+        if signed:
+            sweep_cash(day)
 
     opening_equity, previous_session = capital, entry_session
     cumulative_pnls, simple_returns = [], []
@@ -539,18 +728,48 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                                      "component": "borrowing_interest", "amount": borrowing_charge,
                                      "basis": "modeled"})
             pending_pnl["borrowing_interest", None].append(-borrowing_charge)
+        if signed:
+            denominator = 360 if stock_borrow.day_count == "ACT/360" else 365
+            for asset in short_assets:
+                annual, available = borrow_plan[day, asset]
+                short_value = max(-previous_values[asset], 0.)
+                amount = short_value*annual/denominator
+                records["stock_borrow_accruals"].append(dict(date=day, asset=asset, mark_session=previous_session,
+                    cutoff_at=_cutoff(day), available_at=available, short_market_value=short_value,
+                    annual_rate=annual, day_fraction=1/denominator, amount=amount))
+                if amount:
+                    fund(day, max(amount-available_cash(), 0.))
+                    cash -= amount
+                    event(day, "stock_borrow_fee", asset=asset, dc=-amount)
+                    records["costs"].append(dict(cost_id=f"C{len(records['costs']):06d}", date=day,
+                        time=None, trade_id=None, asset=asset, component="stock_borrow_fee", amount=amount,
+                        basis=stock_borrow.metadata["basis"]))
+                    pending_pnl["stock_borrow_fee", asset].append(-amount)
+            denominator = 360 if long_short.rebate_day_count == "ACT/360" else 365
+            rebate = collateral*long_short.rebate_rate/denominator
+            records["short_financing_accruals"].append(dict(date=day, opening_collateral=collateral,
+                rebate_rate=long_short.rebate_rate, day_fraction=1/denominator, rebate=rebate))
+            if rebate:
+                cash += rebate
+                event(day, "short_collateral_rebate", dc=rebate)
+                pending_pnl["short_collateral_rebate", None].append(rebate)
         for action in split_dates[day]:
             asset = action["asset"]
             old = quantity[asset]
             quantity[asset] *= action["ratio"]
-            if old and (not math.isfinite(quantity[asset]) or quantity[asset] <= 0):
+            if old and (not math.isfinite(quantity[asset]) or quantity[asset] == 0):
                 raise ValueError(f"split quantity is not representable for {asset} on {day}")
             if old:
                 event(day, "split", asset=asset, action_id=action["action_id"], dq=quantity[asset] - old)
         for action in ex_dates[day]:
             asset = action["asset"]
             amount = quantity[asset] * action["cash_per_share"]
-            if amount:
+            if amount < 0:
+                liabilities[action["action_id"]] = {**action, "entitled_quantity": quantity[asset],
+                    "amount": -amount, "outstanding": -amount}
+                event(day, "short_dividend_accrual", asset=asset, action_id=action["action_id"], dl=-amount)
+                pending_pnl["short_dividend_expense", asset].append(amount)
+            elif amount:
                 receivables[action["action_id"]] = {
                     **action, "entitled_quantity": quantity[asset], "amount": amount, "outstanding": amount,
                 }
@@ -569,6 +788,13 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                     reinvestment_rows[action_id] = row
                     records["dividend_reinvestments"].append(row)
                     reinvestment_budgets[action_id] = amount
+        for action_id, item in liabilities.items():
+            if item["pay_date"] == day and item["outstanding"]:
+                amount = item["outstanding"]
+                fund(day, max(amount-available_cash(), 0.))
+                cash -= amount
+                item["outstanding"] = 0.
+                event(day, "short_dividend_payment", asset=item["asset"], action_id=action_id, dc=-amount, dl=-amount)
         if day == end_session:
             release_reinvestment(day, "terminal_cash")
         elif schedule and day in schedule:
@@ -580,20 +806,19 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             before = {a: quantity[a]*prices[day, a] for a in assets}
             for asset in assets:
                 pending_pnl["price_pnl", asset].append(before[asset] - previous_values[asset])
+            if signed:
+                mark_collateral(day, before)
+                sweep_cash(day)
             if schedule and day in schedule:
                 before, outstanding, before_equity = balances(day, "pre_rebalance")
                 peak = max(peak, before_equity)
-                before_gross = math.fsum(before.values())
                 # A pre-trade failure cannot be hidden by a scheduled deleveraging.
-                if before_equity > 0 and not _below_margin(
-                        before_equity/before_gross if before_gross else None, threshold):
+                if before_equity > 0 and not breached(before, before_equity):
                     rebalance(day, before, outstanding, before_equity)
             elif reinvestment_budgets:
                 before, outstanding, before_equity = balances(day, "pre_reinvestment")
                 peak = max(peak, before_equity)
-                before_gross = math.fsum(before.values())
-                if before_equity > 0 and not _below_margin(
-                        before_equity/before_gross if before_gross else None, threshold):
+                if before_equity > 0 and not breached(before, before_equity):
                     reinvest(day, before_equity)
                 else:
                     release_reinvestment(day, "stopped_before_trade")
@@ -609,9 +834,9 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             if not math.isfinite(wealth) or (equity > 0 and wealth <= 0):
                 raise ValueError(f"cumulative wealth is not representable on {day}")
             peak = max(peak, equity)
-            gross_value = math.fsum(values.values())
+            gross_value = math.fsum(abs(v) for v in values.values())
             equity_ratio = equity / gross_value if gross_value else None
-            margin_breached = _below_margin(equity_ratio, threshold)
+            margin_breached = breached(values, equity)
             if equity <= 0 or margin_breached:
                 status = "stopped"
                 stop_reason = "nonpositive_equity" if equity <= 0 else "maintenance_margin_breach"
@@ -631,7 +856,12 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 "cumulative_pnl": math.fsum(cumulative_pnls),
                 "cumulative_simple_return": math.fsum(simple_returns), "compounded_return": wealth - 1,
                 "cash": cash, "debt": debt, "dividend_receivable": outstanding,
-                "gross_exposure": gross_value, "net_exposure": gross_value,
+                "restricted_collateral": collateral, "dividend_liability": math.fsum(v["outstanding"] for v in liabilities.values()),
+                "long_exposure": math.fsum(max(v, 0.) for v in values.values()),
+                "short_exposure": math.fsum(max(-v, 0.) for v in values.values()),
+                "short_liability": math.fsum(max(-v, 0.) for v in values.values()),
+                "margin_required": margin_required(values) if signed else (threshold or 0.)*gross_value,
+                "gross_exposure": gross_value, "net_exposure": math.fsum(values.values()),
                 "gross_leverage": gross_value / equity if equity > 0 else None,
                 "equity_ratio": equity_ratio, "margin_breached": margin_breached,
                 "drawdown": equity / peak - 1, "includes_entry_costs": previous_session == entry_session,
@@ -644,6 +874,9 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 records["receivables"].append({"session": day, "action_id": action_id,
                                                 **{k: item[k] for k in SCHEMAS["receivables"]
                                                    if k not in {"session", "action_id"}}})
+            for action_id, item in liabilities.items():
+                records["dividend_liabilities"].append({"session": day, "action_id": action_id,
+                    **{k: item[k] for k in SCHEMAS["dividend_liabilities"] if k not in {"session", "action_id"}}})
             pending_pnl.clear()
             previous_values, opening_equity, previous_session = values, equity, day
             if status == "stopped":
@@ -696,7 +929,19 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             reinvestment_cost_policy="zero_commission_spread_impact",
             margin_monitoring="before_scheduled_or_reinvestment_trade_and_after_session_close",
             turnover_denominator="pre_trade_equity_entry_separately_labeled")
-    return BacktestResult(**{name: pl.DataFrame(rows, schema=SCHEMAS[name])
+    if signed:
+        metadata.update(concentration_denominator="absolute_target_value_over_gross_exposure",
+            target_weight_normalization="none_signed_inputs",
+            long_short=asdict(long_short), stock_borrow=borrow_metadata,
+            sizing=signed_kind, signed_targets=allocation, weights=None, resolved_weights=None,
+            collateral_policy="marked_each_session_close_restricted_from_sweep",
+            margin_convention="equity_ge_long_margin_times_long_plus_short_margin_times_absolute_short",
+            funding="explicit_cash_loan_including_collateral_costs_and_unpaid_receivables",
+            rebate_basis="opening_restricted_collateral_gross_before_separate_borrow_fees",
+            reinvestment_if_payer_short="release_cash_no_cover",
+            short_dividend_policy="ex_date_liability_pay_date_settlement_no_reinvestment")
+    return BacktestResult(**{name: (target_table.clone() if name == "targets" and signed and target_table is not None
+                             else pl.DataFrame(rows, schema=SCHEMAS[name]))
                              for name, rows in records.items()}, metadata=metadata,
                           status=status, stop_reason=stop_reason,
                           stop_session=stop_session, stop_time=stop_time)

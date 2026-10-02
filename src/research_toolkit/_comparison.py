@@ -51,7 +51,7 @@ def compare_performance(reports, *, benchmark_label=None, coverage="strict",
                 if mode == "strict":
                     raise ValueError(f"scenario {label!r} has incompatible {field}; select explicit separate handling")
         configs[label] = deepcopy(m)
-        metrics = pl.concat([report.summary, report.benchmark_comparison.filter(pl.col("metric").is_in(["return_correlation", "beta"]))])
+        metrics = pl.concat([report.summary, report.benchmark_comparison.filter(pl.col("metric").is_in(["return_correlation", "beta", "annualized_tracking_error", "information_ratio"]))])
         entries = [(label, "portfolio", metrics)]
         if benchmark_label is not None:
             if report.benchmark_summary.is_empty():

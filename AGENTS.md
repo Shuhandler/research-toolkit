@@ -61,6 +61,13 @@
   margin checks. Do not silently turn a target concentration limit into a rule that
   trades whenever actual weights drift. Analytical ex-date-reinvested returns are
   distinct from the executable receivable/cash ledger.
+- Signed portfolios use explicit equity exposures or exact quantities, never negative
+  long-allocation weights. Preserve daily marked segregated collateral and separate
+  long/short margin fractions (user-confirmed choices). Restricted cash cannot silently
+  fund longs or repay debt. Equity includes signed values and collateral once.
+  Borrow fees use prior supplied closing short values and explicit calendar-day rates;
+  gross collateral rebate is separate, never a net fee quote. Short dividends accrue
+  liabilities and settle once; long DRIP must not auto-cover a now-short payer.
 - Keep fixed-rate and historical SOFR financing distinct. SOFR rates require a
   complete supplied publication calendar, point-in-time availability timestamps,
   declared coverage/units and an age limit. Never apply an observation before its

@@ -116,6 +116,8 @@ def allocation(report, *, ax=None):
         label = component.removeprefix("asset:") if component.startswith("asset:") else {
             "account:cash": "Cash", "account:debt": "Debt (negative)",
             "account:dividend_receivable": "Dividend receivables",
+            "account:restricted_collateral": "Restricted short collateral",
+            "account:dividend_liability": "Dividend liabilities (negative)",
         }[component]
         ax.plot(rows["session"].to_list(), rows["weight"].to_list(), label=label)
     ax.legend(fontsize="small", ncol=2)
@@ -221,8 +223,12 @@ def exposures(report, *, ax=None):
     """Prepared dollar exposure, cash, debt and receivables from the closing ledger."""
     context = _context(report)
     _, ax = _axes(ax)
-    for col, label in (("gross_exposure", "Gross = net risky exposure (long only)"),
-                       ("cash", "Cash"), ("debt", "Debt"), ("dividend_receivable", "Dividend receivables")):
+    columns = [("gross_exposure", "Gross risky exposure"), ("net_exposure", "Net risky exposure"),
+               ("cash", "Cash"), ("debt", "Debt"), ("dividend_receivable", "Dividend receivables")]
+    if report.metadata.get("long_short") is not None:
+        columns += [("long_exposure", "Long exposure"), ("short_exposure", "Absolute short exposure"),
+                    ("restricted_collateral", "Restricted collateral"), ("dividend_liability", "Dividend liabilities")]
+    for col, label in columns:
         ax.plot(report.daily["session"].to_list(), report.daily[col].to_list(), label=label)
     ax.legend(fontsize="small")
     return _finish(ax, f"Closing exposures and funding | {context}", report.metadata["currency"])

@@ -21,6 +21,7 @@ future module only with working, tested behavior, without stub hierarchies.
 | `adapters.py` | Offline Yahoo chart conversion with explicit adjustment/availability contracts | Notebook extension |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_dividends.py` | Explicit payment-funded reinvestment policy; execution stays in the shared ledger | Post-M2 |
+| `_shorts.py` | Explicit signed position contracts, post-cost sizing, segregated collateral policy, and stock-borrow rate validation | Long/short extension |
 | `_financing.py` | Explicit fixed cash/loan rates, day count, sweep and margin configuration | 1C |
 | `_sofr.py` | Historical SOFR/publication contracts, source identity, known-rate selection and loan policy | Post-M2 |
 | `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
@@ -62,8 +63,9 @@ or aggregate conflicting rows automatically.
 
 Empty, typed action tables require an explicit source assertion of complete action
 coverage. An empty table must not mean "we did not check." Metadata must also
-declare coverage sufficient for receivables still unpaid at the end. M1 rejects
-shorts, multi-currency inputs, nonpositive equity, unsupported corporate actions,
+declare coverage sufficient for receivables still unpaid at the end. The legacy weight interface rejects shorts; the explicit signed interface is
+now implemented separately at the input boundary. All modes reject multi-currency
+inputs, nonpositive entry equity, unsupported corporate actions,
 and ambiguous dividend adjustment bases. It supports all-cash via initial leverage
 zero; no trades or debt are created. Weights remain a declared allocation template.
 
@@ -268,7 +270,8 @@ receivable/payment model. All plots consume the prepared containers.
 [The API](api.md#scheduled-allocation-and-rebalancing--milestone-2) records exact
 schemas, funding/receivable choices, concentration and cost solver limits, units,
 turnover denominators and null reasons. Fixed/minimum ticket fees, next-open
-execution, shorts and broker-specific margin rules are still future extensions.
+execution and broker-specific margin rules are still future extensions. Explicit
+signed positions now use the extension described below.
 
 ## Historical funding input boundary
 
@@ -322,3 +325,25 @@ market calendar and source identity, then calls the same `_simulate` engine as
 before. It attaches processing/stop status afterward; signal conversion itself
 never sizes positions or books costs. Ordinary target-table behavior is preserved.
 See [contracts](chronological-research.md) for schemas and limitations.
+
+
+## Signed portfolio extension — implemented
+
+`_shorts` owns concrete `LongShortPolicy` and `StockBorrow` contracts, signed input
+validation and a cost-aware target solver. Existing `weights` keep their long-only
+meaning; `equity_exposures` and `quantities` are mutually exclusive alternatives.
+The solver previews orders but never books expenses. `scheduled_rebalance` accepts
+complete signed target tables while long-only signals retain their existing contract.
+
+`_backtest._simulate` remains the one accounting engine. Its signed basket path
+posts into the same trades/costs/events, with restricted collateral, short dividend
+liabilities and daily borrow/rebate audits. Existing SOFR selection and loan accrual,
+long dividend payments, DRIP, position reconciliation, P&L, and stop handling are
+shared. Collateral is separate from free cash; its release never creates P&L.
+New zero/typed-empty fields are additive for existing long-only results.
+
+`_metrics` extends existing performance calls with aligned active-return ratios
+and prepares signed balance-sheet allocation. Plots consume those prepared tables;
+comparison tables retain consistent capital/coverage and numerical status. No
+provider, plotting, model training or new runtime dependency enters simulation.
+See [the signed API and assumptions](long-short.md).

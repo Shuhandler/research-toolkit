@@ -228,7 +228,7 @@ The user requested implementation of roadmap milestone 3. This adds lagged featu
 chronological train/validation/test partitions, label-horizon/availability purging,
 training-only standardization, audited validation selection/final-test use, and
 dated long-only signal instructions. No short-stock accounting or ML dependency
-was requested or added; those remain separate later work.
+was requested in milestone 3; the subsequent signed-accounting extension is recorded below.
 
 Engineering choices exposed by this release (not additional user confirmations):
 
@@ -252,4 +252,44 @@ Engineering choices exposed by this release (not additional user confirmations):
 [Milestone 3 contracts](chronological-research.md) and the
 [example notebook](../examples/chronological_research.ipynb) record these decisions.
 Next roadmap work is optional walk-forward/model workflows; next-open/intraday
-execution, shorts, lending/collateral and richer execution constraints remain open.
+execution and richer execution constraints remain open. The subsequent long/short
+accounting extension is recorded below.
+
+
+## Long/short extension — user decisions and implementation
+
+The user requested signed portfolios, supplied hedges, short accounting, stock-loan
+fees, short dividends, existing cost/SOFR support, margin stops and information
+ratios, with offline tests and a runnable example. The user confirmed **1A: daily
+marked restricted collateral** and **2A: separate long/short maintenance fractions**.
+These supersede the earlier deferral of short accounting. No private notebook or
+assignment data is changed, and no publishing/push is authorized.
+
+Implemented engineering choices, exposed and documented rather than additional
+user confirmations:
+
+- Extend buy-and-hold and scheduled rebalancing on the shared ledger. Signed
+  post-cost equity exposures and exact quantities are separate from legacy long
+  allocation weights. Exact quantities preserve the original longs when adding a
+  caller-specified hedge; incremental fees/collateral can increase the loan.
+- Segregate a caller-supplied multiple (at least one) of short market value at
+  supplied closes. Released collateral follows the explicit debt sweep; opening
+  proceeds do not automatically repay the loan. Side-specific margin replaces the
+  old long-only threshold in signed mode.
+- Explicit fixed asset borrow assumptions or complete dated calendar-day rates,
+  available by New York midnight. Accrue on the prior supplied close's short value.
+  Separate gross interest on all restricted collateral from fees, loans and free
+  cash interest. Net rebate quotes and borrow availability/recall modeling remain
+  unsupported.
+- Short dividends accrue liabilities and settle on the provided dates, including
+  after covering. Long reinvestment stays cost-free; if the payer has become short,
+  release its old long dividend to cash rather than auto-covering.
+- Signed scheduled targets require exact-target funding through the explicit loan;
+  automatic reserve-based shrinking is rejected. Information ratio extends existing
+  performance reporting with aligned active returns and sample standard deviation.
+- The new example uses only existing self-authored synthetic data. Signal conversion,
+  risk allocation helpers, borrow locates, recalls, broker margin, intraday execution
+  and hedge selection/optimization are outside this signed-accounting extension.
+
+See [contracts and notebook migration](long-short.md) and
+[the runnable comparison](../examples/long_short_hedge.py).

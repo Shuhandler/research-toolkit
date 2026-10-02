@@ -42,3 +42,10 @@ margin stops, per-payment audits and independent ledger reconciliations.
 `test_sofr.py` covers historical-rate input contracts, publication-aware selection,
 calendar/day-count accrual, source identity, offline replay and shared ledger
 integration. Rates in these tests are synthetic, not historical SOFR fixtures.
+
+
+`test_long_short.py` checks signed price P&L, equity-neutral short entry,
+restricted collateral, exact-quantity hedges, fixed/nonlinear actual-trade costs,
+partial covers and sign crossings, weekend/dated borrow fees, historical SOFR,
+short dividends/splits, protected zero-cost long DRIP, side-specific margin stops,
+reporting and zero-benchmark information ratios with small numerical oracles.

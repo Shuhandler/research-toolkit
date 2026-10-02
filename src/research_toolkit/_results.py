@@ -57,6 +57,9 @@ class BacktestResult:
     financing_accruals: pl.DataFrame
     execution_costs: pl.DataFrame
     signal_audit: pl.DataFrame
+    stock_borrow_accruals: pl.DataFrame
+    short_financing_accruals: pl.DataFrame
+    dividend_liabilities: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
     stop_reason: str | None = None

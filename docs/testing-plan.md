@@ -269,3 +269,17 @@ workflow and notebook execute; the executed notebook contains three figures.
 Equity, allocation and drawdown charts were inspected against the numerical output.
 Notebook execution required local Jupyter kernel sockets; no external data access
 was used. `git diff --check` passes, and no new dependencies were introduced.
+
+
+## Signed-accounting checks — implemented
+
+`test_long_short.py` uses hand-checkable long/short prices and account balances to
+verify equity-neutral opening sales, restricted collateral and separate margin,
+unchanged long quantities when adding a hedge, entry/post-cost sizing, absolute
+trade costs on partial covers/sign changes, and zero trades. Calendar-day fee
+oracles cover weekends, dated changes, ACT/360/365F and existing SOFR resets.
+Short dividend accrual/payment and signed splits reconcile; long DRIP remains
+cost-free and cannot consume short payments or auto-cover a now-short payer.
+Tests retain margin/zero/negative-equity failure closes and verify aligned zero-
+benchmark information ratios, coverage guards, allocation weights and plots.
+The full existing long-only suite remains a required regression check.

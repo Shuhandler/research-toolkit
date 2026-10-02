@@ -180,3 +180,12 @@ and plots the resulting ledger. Run it offline with
 `python examples/run_acceptance.py --milestone 3`. These examples use the existing
 synthetic snapshot only; no private assignment data or downloads. The research
 release remains long-only, daily close execution. See [contracts](../docs/chronological-research.md).
+
+
+## Long portfolio with a supplied short hedge
+
+Run `python examples/long_short_hedge.py`. It reuses the saved synthetic equity
+snapshot, keeps the original leveraged long quantities, and adds a supplied short
+position. It prints numerical cost and performance comparisons against a supplied
+zero-return benchmark. No downloads, CSVs or figures are generated.
+See [the notebook migration guide](../docs/long-short.md).
