@@ -108,8 +108,9 @@ risk. The [offline notebook](../examples/scheduled_rebalancing.ipynb) and
 [Python workflow](../examples/scheduled_rebalancing.py) compare actual monthly trades
 with unchanged initial holdings. No new required dependencies.
 
-Cost-model extension rule: fixed/per-share/minimum fees and capacity-sensitive
-impact remain unsupported; add them only alongside corresponding sizing tests.
+M2 originally deferred per-share commissions and nonlinear impact. The notebook
+reuse extension now supports these with corresponding sizing tests. Fixed/minimum
+ticket fees and volume-constrained execution remain unsupported.
 M2 uses the existing configurable proportional commission/spread/impact models
 on actual changed quantities, including sales.
 
@@ -161,3 +162,19 @@ rate age, day counts and per-calendar-day accrual audits. Fixed-rate financing
 remains supported. Offline tests verify known-rate selection, actual posting and
 reconciliations. Source adapters, historical vintage reconstruction, SOFR-linked
 cash rates, signed rates/spreads and alternate interest billing are deferred.
+
+## Notebook research reuse extension — implemented
+
+Capped inverse-volatility redistribution, pre-decision liquidity estimates,
+square-root impact/per-share costs and funded sizing, dated RF reporting, explicit
+Sharpe denominator, rolling beta/correlation, prepared cumulative plots, numerical
+scenario comparisons and a small offline Yahoo chart adapter are implemented.
+See [the contracts](notebook-extensions.md) and
+[synthetic workflow](../examples/research_workflow.py).
+
+Acceptance focuses on feasible weights and timing, independent entry-cost oracles,
+actual-trade reconciliation (including nonlinear scheduled orders), free automatic
+dividend purchases, strict interval matching, calendar-day rate availability,
+undefined metric statuses, partial-run/mismatch guards and provider adjustment
+semantics. Assignment notebook migration is intentionally a separate task; the
+private reference remains unchanged. This does not implement milestone 3 signals.

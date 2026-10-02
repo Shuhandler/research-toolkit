@@ -75,7 +75,7 @@ These are explicit, revisable design choices, not additional user confirmations:
 - **Before external distribution:** choose this project's license and verify package
   name availability. Do not assume the reference's license applies to new work.
 - **Before later phases:** broker-specific margin/liquidation, lot rules, short
-  borrowing, complex corporate actions, multi-currency/FX, provider adapters,
+  borrowing, complex corporate actions, multi-currency/FX, additional provider/download adapters,
   intraday execution, and interactive plotting. Do not prebuild abstractions for them.
 
 ## Status and next step
@@ -127,8 +127,9 @@ Engineering decisions made within M2 (not additional user confirmations):
 - Add explicit analytical ex-date-reinvested raw total returns for allocation;
   executable positions retain actual receivable/payment accounting.
 - Turnover counts gross buys plus sells over pre-trade equity, with entry separate.
-  Fixed/per-share/minimum fees and nonlinear impact remain cost-model extensions;
-  they are not approximated by this proportional-cost sizing solver.
+  M2 originally deferred per-share fees and nonlinear impact; the notebook
+  extension below now implements them in a separate sizing solver. Fixed/minimum
+  ticket fees remain deferred.
 
 Next is milestone 3: dated signals and chronological research boundaries, retaining
 these timing and accounting contracts. Real-data research can also begin after
@@ -186,3 +187,37 @@ confirmations):
 Possible follow-ups are source adapters, vintage reconstruction, SOFR-linked cash,
 signed rates/spreads, and other loan compounding/billing conventions. They are not
 implicitly supported by this release.
+
+## Notebook reuse extension — user request and implemented choices
+
+The user requested reusable functionality from the private Challenge 1 notebook:
+capped inverse volatility, square-root execution costs and sizing, dated risk-free
+performance, rolling beta/correlation, cumulative plots, scenario tables and a
+small justified offline Yahoo adapter. They require the notebook remain unchanged,
+no private prose/caches in the repository, no assignment constants in the library,
+Polars tables and no hidden downloads. No push or publication is authorized.
+
+Engineering choices within that request (not extra user confirmations):
+
+- Preserve cap rejection and constant-rate reporting; opt into redistribution or
+  supply exactly matched dated RF returns. The notebook uses excess-return Sharpe
+  volatility; the toolkit retains portfolio-return volatility by default and
+  exposes an explicit denominator choice.
+- One frozen daily-volatility/dollar-ADV snapshot feeds a square-root cost object.
+  Costs use actual orders and raw reference prices, with per-share commissions
+  supported. The engine solves funding and records costs once; a preview is not
+  an extra debit. Automatic dividend reinvestment stays cost-free.
+- Explicit comparison mismatch modes preserve separate samples/assumptions and
+  status, never silently intersecting dates. Plots use prepared numerical tables.
+- The small Yahoo adapter consumes supplied decoded chart JSON. Provider Close is
+  labeled split-adjusted; raw reconstruction requires explicit cumulative factors
+  through retrieval. Authoritative sessions/actions/payment dates are required;
+  availability is disclosed as reconstructed and volume units must be declared.
+  No original Yahoo payload was present alongside the reference notebook; adapter
+  verification uses self-authored synthetic format fixtures.
+
+[Implementation contracts and migration notes](notebook-extensions.md) and the
+[synthetic workflow](../examples/research_workflow.py) record these choices. All
+implementation is independently written; no private notebook code/prose/data is
+copied. Later signal/ML work, dated cost-snapshot refresh, fixed/minimum ticket fees,
+live provider acquisition and point-in-time vintage reconstruction remain open.

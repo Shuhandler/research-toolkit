@@ -11,6 +11,7 @@ import platform
 import polars as pl
 
 from ._costs import TradeCosts
+from ._execution import SquareRootImpactCosts, COST_SCHEMA, _entry_size, _impact_basket
 from ._data import _validated_market
 from ._financing import Financing, _below_margin
 from ._sofr import SOFRFinancing, _sofr_plan
@@ -29,6 +30,7 @@ except PackageNotFoundError:
 F, S, D, I = pl.Float64, pl.String, pl.Date, pl.Int64
 UTC = pl.Datetime("us", "UTC")
 SCHEMAS = {
+    "execution_costs": {"trade_id": S, "session": D, **COST_SCHEMA},
     "daily": {"session": D, "period_start": D, "opening_equity": F, "equity": F,
               "pnl": F, "simple_return": F, "log_return": F, "cumulative_pnl": F,
               "cumulative_simple_return": F, "compounded_return": F, "cash": F,
@@ -81,7 +83,7 @@ def _check(actual, expected, scale, context):
 
 
 def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date,
-                 end_session: date, policy: BuyHoldPolicy, costs: TradeCosts,
+                 end_session: date, policy: BuyHoldPolicy, costs: TradeCosts | SquareRootImpactCosts,
                  cash_rate: float | None = None, cash_day_count: str | None = None,
                  financing: Financing | SOFRFinancing | None = None,
                  dividend_reinvestment: DividendReinvestment | None = None) -> BacktestResult:
@@ -107,7 +109,7 @@ def buy_and_hold(market, *, weights, initial_capital: float, entry_session: date
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
-                        policy: RebalancePolicy, costs: TradeCosts, financing: Financing | SOFRFinancing,
+                        policy: RebalancePolicy, costs: TradeCosts | SquareRootImpactCosts, financing: Financing | SOFRFinancing,
                         dividend_reinvestment: DividendReinvestment | None = None):
     """Execute explicit dated long-only targets through the shared daily ledger.
 
@@ -140,8 +142,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     market = _validated_market(market)
     if market.metadata["price_basis"] != "raw":
         raise ValueError("buy_and_hold requires raw execution prices")
-    if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, TradeCosts):
-        raise ValueError("explicit BuyHoldPolicy and TradeCosts objects are required")
+    if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, (TradeCosts, SquareRootImpactCosts)):
+        raise ValueError("explicit BuyHoldPolicy and supported cost model objects are required")
     policy.__post_init__()
     if dividend_reinvestment is not None:
         if not isinstance(dividend_reinvestment, DividendReinvestment):
@@ -192,15 +194,21 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     assets = sorted(allocation)
     total_weight = math.fsum(allocation.values())
     resolved_weights = {a: allocation[a] / total_weight for a in assets}
-    rates = costs.resolve(assets)
-    fee_rate = math.fsum(resolved_weights[a] * math.fsum(rates[c][a] for c in rates)
-                         for a in assets)
-    gross = capital * exposure / (1 + exposure * fee_rate)
-    if not math.isfinite(gross):
-        raise ValueError("initial notional is not representable")
     dates = [d for d in all_sessions if entry_session <= d <= end_session]
     closes = dict(market.sessions.select("session", "close_at").iter_rows())
     prices = {(d, a): p for d, a, p in market.prices.iter_rows()}
+    impact_costs = isinstance(costs, SquareRootImpactCosts)
+    entry_binding = None
+    rates = None if impact_costs else costs.resolve(assets)
+    if impact_costs:
+        entry_binding = costs._bind(assets, {a: prices[entry_session, a] for a in assets},
+            entry_session, schedule[entry_session][2] if schedule else None, market.metadata["currency"])
+        gross = _entry_size(capital, exposure, resolved_weights, entry_binding)
+    else:
+        fee_rate = math.fsum(resolved_weights[a] * math.fsum(rates[c][a] for c in rates) for a in assets)
+        gross = capital * exposure / (1 + exposure * fee_rate)
+    if not math.isfinite(gross):
+        raise ValueError("initial notional is not representable")
     split_dates, ex_dates = defaultdict(list), defaultdict(list)
     for action in market.splits.iter_rows(named=True):
         if action["asset"] in allocation:
@@ -212,9 +220,12 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     if target_table is not None:
         records["targets"] = target_table.to_dicts()
         # Validate all cost/leverage combinations before processing the first fill.
-        for target_weights, target_leverage, _ in schedule.values():
-            _basket({a: 0. for a in assets}, capital, 0., target_weights,
-                    target_leverage, rates, rebalance_policy.receivable_policy)
+        for day, (target_weights, target_leverage, decision) in schedule.items():
+            if impact_costs:
+                costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"])
+            else:
+                _basket({a: 0. for a in assets}, capital, 0., target_weights,
+                        target_leverage, rates, rebalance_policy.receivable_policy)
     quantity = {a: 0.0 for a in assets}
     cash = capital
     debt = 0.0
@@ -279,7 +290,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         qty = notional / mark
         if not math.isfinite(qty) or qty <= 0:
             raise ValueError(f"initial quantity is not representable for {asset}")
-        components = {c: notional * rates[c][asset] for c in rates}
+        components = entry_binding.components(asset, notional) if impact_costs else {c: notional * rates[c][asset] for c in rates}
         cost = math.fsum(components.values())
         entry_plan.append((asset, notional, mark, qty, components, cost))
     entry_cost = math.fsum(item[5] for item in entry_plan)
@@ -293,6 +304,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         event(entry_session, "borrowing", phase="entry_close", dc=debt, dd=debt)
     for asset, notional, mark, qty, components, cost in entry_plan:
         trade_id = f"T{len(records['trades']):06d}"
+        if impact_costs:
+            records["execution_costs"].append(dict(entry_binding.row(asset, notional), trade_id=trade_id, session=entry_session))
         quantity[asset] = qty
         event(entry_session, "trade", phase="entry_close", asset=asset,
               trade_id=trade_id, dq=qty, dc=-notional)
@@ -339,8 +352,13 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     def rebalance(day, values, outstanding, equity):
         nonlocal cash, debt
         target_weights, target_leverage, decision = schedule[day]
-        changes, cost = _basket(values, equity, outstanding, target_weights,
-                                target_leverage, rates, rebalance_policy.receivable_policy)
+        binding = costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"]) if impact_costs else None
+        if impact_costs:
+            changes, cost = _impact_basket(values, equity, outstanding, target_weights,
+                target_leverage, binding, rebalance_policy.receivable_policy)
+        else:
+            changes, cost = _basket(values, equity, outstanding, target_weights,
+                target_leverage, rates, rebalance_policy.receivable_policy)
         new_net_cash = math.fsum([cash, -debt, -math.fsum(changes.values()), -cost])
         new_debt = max(-new_net_cash, 0.)
         tolerance = min(.009, 1e-8 + 1e-12*max(capital, equity))
@@ -371,9 +389,11 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
                 next_quantity = 0.
             if next_quantity < 0 or not math.isfinite(next_quantity):
                 raise ValueError("scheduled quantity is not representable")
-            component_costs = {c: abs(notional)*rates[c][asset] for c in rates}
+            component_costs = binding.components(asset, notional) if impact_costs else {c: abs(notional)*rates[c][asset] for c in rates}
             trade_cost = math.fsum(component_costs.values())
             trade_id = f"T{len(records['trades']):06d}"
+            if impact_costs:
+                records["execution_costs"].append(dict(binding.row(asset, notional), trade_id=trade_id, session=day))
             quantity[asset] = next_quantity
             cash -= notional+trade_cost
             event(day, "trade", phase="rebalance_close", asset=asset, trade_id=trade_id,
@@ -641,6 +661,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         "stop_reason": stop_reason, "stop_session": stop_session.isoformat() if stop_session else None,
         "stop_time": stop_time.isoformat() if stop_time else None,
         "policy": asdict(policy), "cost_rates": rates, "cost_basis": "modeled",
+        "cost_model": entry_binding.metadata if impact_costs else {"model": "proportional"},
         "cash_rate": rate, "cash_day_count": cash_day_count, "cash_capitalization": "daily_calendar_date",
         "financing": financing_metadata,
         "borrowing_rate": borrowing_rate, "maintenance_equity_ratio": threshold,

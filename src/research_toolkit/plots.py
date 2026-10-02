@@ -60,6 +60,25 @@ def returns(report, *, ax=None):
     return _daily(report, "simple_return", "Daily net simple returns", ax, True)
 
 
+def cumulative_returns(report, *, method, benchmark=True, ax=None):
+    """Plot prepared summed returns, compounded returns, or a wealth multiple."""
+    context = _context(report)
+    choices = {"sum": ("cumulative_simple_return", "Cumulative sum of simple returns", "Sum of returns"),
+               "compound": ("compounded_return", "Compounded return", "Compounded return"),
+               "wealth": ("wealth", "Wealth multiple", "Wealth / initial capital")}
+    if method not in choices or type(benchmark) is not bool:
+        raise ValueError("require method=sum, compound or wealth and boolean benchmark")
+    column, title, ylabel = choices[method]
+    _, ax = _axes(ax)
+    for series in ("portfolio", "benchmark") if benchmark else ("portfolio",):
+        rows = report.cumulative.filter(pl.col("series") == series)
+        if rows.height:
+            label = "Portfolio (net)" if series == "portfolio" else f"Benchmark ({report.metadata['benchmark']['basis']})"
+            ax.plot(rows["session"].to_list(), rows[column].to_list(), label=label)
+    ax.legend(fontsize="small")
+    return _finish(ax, f"{title} | {context}", ylabel, percent=method != "wealth")
+
+
 def equity(report, *, ax=None):
     context = _context(report)
     _, ax = _axes(ax)
@@ -150,13 +169,15 @@ def rolling_risk(result, *, metric="annualized_volatility", ax=None):
     from ._results import RollingRiskResult
     if not isinstance(result, RollingRiskResult):
         raise ValueError("expected RollingRiskResult from rolling_risk()")
-    if metric not in {"annualized_volatility", "sharpe"}:
-        raise ValueError("metric must be annualized_volatility or sharpe")
+    if metric not in {"annualized_volatility", "sharpe", "beta", "correlation"}:
+        raise ValueError("metric must be annualized_volatility, sharpe, beta or correlation")
+    if metric in {"beta", "correlation"} and result.metadata.get("benchmark") is None:
+        raise ValueError("benchmark is required for beta/correlation plotting")
     _, ax = _axes(ax)
     ax.plot(result.values["session"].to_list(), result.values[metric].to_list())
     m = result.metadata
     status = f" | STOPPED: {m['stop_reason']} (partial)" if m["status"] != "complete" else ""
-    label = "Annualized volatility" if metric == "annualized_volatility" else "Sharpe"
+    label = "Annualized volatility" if metric == "annualized_volatility" else metric.capitalize()
     return _finish(ax, f"{m['window']}-period trailing {label.lower()} | "
         f"{m['entry_session']} to {m['actual_end_session']}{status}",
         "Volatility / sqrt(year)" if metric == "annualized_volatility" else "Ratio",

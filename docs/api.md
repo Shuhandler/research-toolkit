@@ -4,12 +4,15 @@ Use `import research_toolkit as rt`. Core functions are `prepare_market_data`,
 `returns`, `cumulative_returns`, `equal_weights`, `buy_and_hold`, `performance`,
 `correlation`, `save_snapshot`, `load_snapshot`, `inverse_volatility_weights`,
 `scheduled_rebalance`, `risk_contributions`, and `rolling_risk`, with optional
-`rt.plots` views.
+`rt.plots` views. The [notebook extensions](notebook-extensions.md) document
+`SquareRootImpactCosts`, `estimate_liquidity`, `estimate_trade_costs`,
+`size_entry_orders`, `risk_free_returns`, `compare_performance`,
+`rt.adapters.yahoo_chart`, and additions to existing functions/result tables.
 Result/configuration objects are concrete dataclasses; their tables are Polars
 DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Short positions, signal-driven trading, richer cost models, provider adapters, and
+Short positions, signal-driven trading, fixed/minimum ticket fees, provider downloads, and
 chronological model research remain unimplemented. Future
 extensions in [architecture](architecture.md) are labeled separately.
 
@@ -228,7 +231,9 @@ Cost components are nonnegative scalar bps or mappings covering exactly the
 allocation assets (including explicit zero-weight assets). They are recorded as
 **modeled** proportional per-side cash expenses, not measured liquidity data.
 Half-spread is already the one-sided cost. No adverse fill-price adjustment is
-added on top. Fixed/minimum fees and nonlinear impact are not supported.
+added on top. Fixed/minimum ticket fees are not supported. `SquareRootImpactCosts` adds
+per-share commissions and nonlinear impact through its own tested sizing solver;
+see [execution contracts](notebook-extensions.md#liquidity-estimation-and-execution-costs).
 
 The implementation follows [financial conventions](financial-conventions.md):
 
@@ -340,6 +345,9 @@ The retained last simple return/drawdown may be below −100%; it is never clipp
 | Table | Columns and meaning |
 | --- | --- |
 | `summary` | `metric: String`, `value: Float64` (nullable), `unit: String`, `n_obs: Int64`, `status: String` |
+| `cumulative` | Prepared `session`, `series`, `cumulative_simple_return`, `compounded_return`, `wealth` for explicit-convention plotting |
+| `risk_free_returns` | Exact dated holding intervals and the resolved `simple_return` benchmark |
+| `benchmark_summary` | Same metric schema, using the report's RF/MAR and benchmark normalized to initial capital |
 | `benchmark_comparison` | Same schema; strict common-sample comparisons |
 | `benchmark_series` | `session: Date`, `equity: Float64`; entry capital plus each compounded benchmark close |
 | `daily` | Owned copy of the validated daily ledger, including P&L, simple returns and distinct cumulative columns |
@@ -358,10 +366,14 @@ reports as immutable inputs to plots, and create a new report after changing a r
 Summary metrics: `ending_equity`, `cumulative_pnl` (declared currency),
 `cumulative_simple_return`, `compounded_return`, `max_drawdown` (fractions),
 `annualized_arithmetic_mean` (fraction/year), `annualized_volatility`
-(fraction/sqrt(year)), `sharpe`, `sortino` (ratios). `n_obs` always counts daily
+(fraction/sqrt(year)), `sharpe`, `sortino` (ratios), `entry_cost`,
+`financing_cost` (currency borrowing expenses), and `ending_leverage` (ratio). `n_obs` always counts daily
 holding intervals; drawdown additionally examines the two entry valuations.
-Volatility uses sample standard deviation (`ddof=1`). Sharpe uses periodic excess
-returns; Sortino uses the root-mean-square negative MAR shortfall over **all**
+Volatility uses sample standard deviation (`ddof=1`). Sharpe uses mean periodic
+excess returns divided by portfolio-return volatility by default, or excess-return
+volatility with explicit `sharpe_denominator="excess_returns"`. Dated RF inputs
+are supported as an exclusive alternative to the annual scalar; see
+[dated RF contracts](notebook-extensions.md#dated-risk-free-performance-benchmark). Sortino uses the root-mean-square negative MAR shortfall over **all**
 observations, not only losing observations. Ratios use square-root annualization.
 This is a sampling assumption, not a correction for serial correlation. CAGR and
 drawdown durations are not implemented.
@@ -503,9 +515,12 @@ asset sample volatility raise. Weights are proportional to `1 / sample_volatilit
 normalization uses only those estimates. No risk-free subtraction occurs.
 
 `max_asset_weight` is a finite scalar in `(0, 1]`, measured against gross risky
-notional. Breaches **raise**, with no clipping, optimization or silent redistribution.
+notional. Breaches **raise** by default (`cap_policy="raise"`). Explicit
+`cap_policy="redistribute"` caps and redistributes inverse-volatility weights;
+infeasible caps raise. See [the algorithm and diagnostics](notebook-extensions.md#capped-inverse-volatility).
 A relative 1e-12 tolerance handles equality roundoff. The returned `AllocationResult`
-contains `weights`, `estimates` (`asset`, `annualized_volatility`, `n_obs`), and metadata
+contains `weights`, `estimates` (`asset`, `annualized_volatility`, `n_obs`),
+`diagnostics` (`asset`, `uncapped_weight`, `weight_change`, `at_cap`), and metadata
 with source/basis, snapshot identity, sample interval endpoints, decision date,
 lookback, annualization, `ddof=1`, concentration limit and denominator. It is not a
 model-parameter vector or a portfolio equity-weight table.
@@ -592,8 +607,10 @@ is funded explicitly, sales execute before buys, and remaining cash repays exces
 debt. Costs apply to **absolute changed notional**, not the whole target portfolio.
 Relative notional differences no larger than 1e-13 are treated as representational
 roundoff; this is recorded, not a user-facing minimum-trade threshold. No quantities
-changed means no trades and no fees. Fixed/per-share/minimum fees and nonlinear
-capacity models remain unsupported and need their own sizing tests before addition.
+changed means no trades and no fees. The separate `SquareRootImpactCosts` solver
+supports per-share commissions and size-dependent impact; see the
+[nonlinear model contracts](notebook-extensions.md#liquidity-estimation-and-execution-costs).
+Fixed/minimum ticket fees and constrained execution capacity remain unsupported.
 
 Before a scheduled trade, nonpositive equity or a maintenance breach stops the run
 **before any rebalance can conceal it**. Otherwise the completed close is checked
@@ -664,7 +681,8 @@ for reporting, not for a same-close trading decision. `window >= 2` is an intege
 a full window is required. Early rows stay null with `insufficient_samples` and
 the actual count. `RollingRiskResult.values` has `session`, `period_start` (the
 window's first interval start), `n_obs`, `annualized_volatility`, `sharpe`,
-`volatility_status`, `sharpe_status`. Flat windows have zero volatility and null
+`volatility_status`, `sharpe_status`, plus `beta`, `correlation` and their status
+columns when benchmark reporting is requested (null/`no_benchmark` otherwise). Flat windows have zero volatility and null
 Sharpe with `zero_volatility`. Effective annual risk-free conversion, sample std,
 and annualization match `performance`. Metadata retains status/actual coverage;
 stopped runs require `allow_partial=True`.
@@ -672,7 +690,8 @@ stopped runs require `allow_partial=True`.
 ### Additional prepared-data plots
 
 `rt.plots.rolling_risk(rolling, metric="annualized_volatility", ax=None)` also
-accepts `metric="sharpe"`. `rt.plots.risk_contributions(risk, ax=None)` labels
+accepts `metric="sharpe"`, `"beta"` and `"correlation"`; the last two require
+benchmark inputs in `rolling_risk`. `rt.plots.risk_contributions(risk, ax=None)` labels
 estimated volatility contributions separately from `plots.attribution` dollars.
 `rt.plots.turnover(result, allow_partial=False, ax=None)` separates entry from later
 baskets; stopped results need explicit opt-in. `rt.plots.exposures(report, ax=None)`
@@ -873,3 +892,10 @@ JSON, or reconstruct them from the embedded run records. No network access or
 provider dependency occurs in financing/simulation. See the
 [offline runnable example](../examples/historical_sofr.py), which uses synthetic
 rates rather than claiming historical market results.
+
+## Notebook extension contracts
+
+See [the implemented extension API](notebook-extensions.md) for exact input and
+result schemas, dated risk-free/Sharpe choices, rolling benchmark metrics,
+comparison mismatch policies, cumulative plots, the nonlinear execution audit,
+and offline Yahoo adjustment/availability requirements.

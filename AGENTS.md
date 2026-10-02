@@ -72,6 +72,16 @@
 - Automatic dividend reinvestment has zero commission, spread and impact by user
   decision. Preserve its zero-cost trade/audit records; normal entry and scheduled
   rebalancing retain configured costs, including when funded by released dividends.
+- Preserve explicit cap redistribution versus rejection, dated RF versus scalar
+  inputs, and portfolio-return versus excess-return Sharpe denominators. Match
+  both holding-interval endpoints. Rolling beta/correlation are descriptive only.
+- Square-root costs use daily volatility and dollar ADV; order/ADV is not intraday
+  participation. Bind the frozen pre-decision liquidity snapshot to actual orders,
+  size against post-cost equity, and never debit a preview in addition to the ledger.
+- Provider Close adjustment semantics must be checked. Yahoo raw reconstruction
+  requires explicit cumulative split factors through retrieval; supplied calendars,
+  payment dates and declared volume units remain mandatory. Reconstructed close-time
+  availability is not a point-in-time vintage. Keep adapters offline by default.
 - Charge transaction costs on applicable actual trades. Reconcile positions, trades, cash,
   receivables, debt, costs, P&L, and equity. State the equity denominator used for
   returns, including entry costs and any external flows.

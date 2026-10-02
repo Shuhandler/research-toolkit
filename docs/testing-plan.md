@@ -189,3 +189,45 @@ nonfinite/negative inputs and mutated snapshots raise. Scheduled deleveraging,
 dividend reinvestment and stops retain shared accounting. Each accrual is matched
 to actual cost/events and balance-sheet reconciliation. Embedded source metadata
 reconstructs an identical input identity and replay. No tests download rates.
+
+## Notebook reuse extension checks
+
+New offline tests cover:
+
+- Water filling with one/multiple binding caps, equal feasible caps, infeasible
+  capacity, permutation invariance and unchanged pre-decision cutoffs.
+- Sample daily volatility and mean dollar ADV on exact windows, availability
+  rejection, explicit units and liquidity mutation detection.
+- Independent cost oracle: a $100 order at $10/share, 2 bps commission plus
+  $0.01/share, 3 bps half-spread, daily sigma 0.02, dollar ADV 10,000, eta 0.5
+  yields $0.12 commission + $0.03 spread + $0.10 impact = $0.25 total. Quadrupling
+  notional multiplies impact dollars by eight; sells cost the same and zero orders
+  cost zero.
+- A $100 purchase with sigma 0.1, ADV 100, eta 1 costs $10: capital 110 at 1x,
+  capital 60 at 2x, and capital 210 at 0.5x all buy $100. Ledger cash, debt, fees,
+  positions, attribution and first-return denominators reconcile independently.
+- Nonlinear scheduled drift, switches, leverage changes, liquidation, receivable
+  reserve, split-only/no-trade baskets, all-cash and stopped runs, and free DRIP.
+- Returns 10%, 20%, with RF 0%, 5%, A=2 give Sharpe 2.5 with portfolio volatility
+  and 5 with excess volatility. Matching RF yields undefined zero excess risk.
+- Three calendar rates .36/.72/.36 under ACT/360 give compounded return .004005002
+  or simple .004; missing weekend dates and late observations raise.
+- Rolling beta 2/correlation 1, insufficient history, flat benchmark, exact endpoint
+  alignment, cumulative sum versus compounding/wealth, prepared-data-only plots.
+- Comparison units, one shared benchmark, incompatible conventions, unequal and
+  stopped coverage, explicit mismatch diagnostics, and retained actual stop dates.
+- Synthetic Yahoo payloads: split-adjusted/total-return/raw conversion, volume
+  declarations, later splits outside the sample, explicit pay dates, source hashes,
+  reconstructed availability, missing/null/duplicate bars and unsupported actions.
+
+No original provider cache is a fixture. The adapter's provider-format tests are
+synthetic; these do not validate a real vendor's historical revisions or omitted
+corporate actions. Core imports remain free of optional plotting/provider/ML stacks.
+
+Verification for this extension: 277 offline tests pass on Python 3.14 / Polars
+1.44.2 / Matplotlib 3.11.2 and Python 3.12 / Polars 1.30 / Matplotlib 3.9.
+The older plotting stack emits dependency deprecation warnings. The synthetic
+workflow executes, its preview costs match ledger costs, and exported cumulative
+and rolling-beta figures were inspected. The private reference notebook's SHA-256
+is unchanged. No private data fixtures, downloads, pushes or package publication
+were used.

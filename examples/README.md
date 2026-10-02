@@ -151,3 +151,16 @@ units, coverage and point-in-time vintage; current revised history alone is not
 proof of past availability. The source metadata assertions are the caller's
 responsibility. The example and library never download rates. Publication/day-count
 background is linked in [financial conventions](../docs/financial-conventions.md#historical-sofr-loan-convention).
+
+## Reusable research workflow
+
+`python examples/research_workflow.py` reuses the committed synthetic snapshot,
+with an explicit pre-entry warm-up, capped inverse volatility, synthetic daily
+liquidity, square-root costs and funded entry previews. It compares unlevered and
+levered simulations with free payment-funded dividend reinvestment, separately
+specified financing and changing daily risk-free rates, rolling benchmark metrics,
+and summed/compounded/wealth plots. Outputs go to `artifacts/research-workflow/`.
+No private assignment inputs or network access are used. The library does not
+write/display these files; the example's `main()` explicitly exports them.
+See [the migration guide](../docs/notebook-extensions.md) for provider conversion
+and precise input contracts. Synthetic results are not investment evidence.

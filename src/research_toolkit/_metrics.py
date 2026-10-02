@@ -9,6 +9,7 @@ import polars as pl
 from ._data import _table
 from ._results import BacktestResult, PerformanceResult, CorrelationResult
 from ._returns import cumulative_returns
+from ._risk_free import _risk_free, _aligned_returns
 
 BENCHMARK_SCHEMA = {"period_start": pl.Date, "session": pl.Date, "simple_return": pl.Float64}
 METRIC_SCHEMA = {"metric": pl.String, "value": pl.Float64, "unit": pl.String,
@@ -98,27 +99,68 @@ def _validated_run(result, allow_partial):
     return daily, vals, deepcopy(meta)
 
 
-def performance(result, *, periods_per_year, risk_free_annual_effective,
+def _summary(r, rf, a, mar_period, denominator, currency, ending_equity, pnl, compounded, drawdown):
+    n, root = len(r), math.sqrt(a)
+    excess = [x-y for x, y in zip(r, rf)]
+    vol = stdev(r) if n >= 2 else None
+    sharpe_vol = stdev(excess) if n >= 2 and denominator == "excess_returns" else vol
+    downside = math.sqrt(mean(min(x-mar_period, 0)**2 for x in r))
+    rows = [("ending_equity", ending_equity, currency, n, "ok"), ("cumulative_pnl", pnl, currency, n, "ok"),
+        ("cumulative_simple_return", math.fsum(r), "fraction", n, "ok"),
+        ("compounded_return", compounded, "fraction", n, "ok"),
+        ("annualized_arithmetic_mean", mean(r)*a, "fraction/year", n, "ok"),
+        ("max_drawdown", drawdown, "fraction", n, "ok"),
+        ("annualized_volatility", vol*root if vol is not None else None, "fraction/sqrt(year)", n,
+         "ok" if n >= 2 else "insufficient_samples"),
+        ("sharpe", root*mean(excess)/sharpe_vol if sharpe_vol else None, "ratio", n,
+         "insufficient_samples" if n < 2 else ("zero_excess_volatility" if denominator == "excess_returns" else "zero_volatility")
+         if not sharpe_vol else "ok"),
+        ("sortino", root*mean(x-mar_period for x in r)/downside if downside and n >= 2 else None, "ratio", n,
+         "insufficient_samples" if n < 2 else "zero_downside_risk" if not downside else "ok")]
+    if any(v is not None and not math.isfinite(v) for _, v, _, _, _ in rows):
+        raise ValueError("performance metric is not representable")
+    return pl.DataFrame(rows, schema=METRIC_SCHEMA, orient="row")
+
+
+def _cumulative_rows(start, dates, returns, series):
+    rows, summed, wealth = [(start, series, 0., 0., 1.)], 0., 1.
+    for day, value in zip(dates, returns):
+        summed += value
+        wealth *= 1+value
+        if not math.isfinite(summed) or not math.isfinite(wealth):
+            raise ValueError("cumulative returns are not representable")
+        rows.append((day, series, summed, wealth-1, wealth))
+    return rows
+
+
+def performance(result, *, periods_per_year, risk_free_annual_effective=None,
                 minimum_acceptable_return_annual_effective, benchmark=None,
-                benchmark_metadata=None, alignment="strict", allow_partial=False) -> PerformanceResult:
+                benchmark_metadata=None, alignment="strict", allow_partial=False,
+                risk_free_returns=None, risk_free_metadata=None,
+                sharpe_denominator="portfolio_returns") -> PerformanceResult:
     """Prepare net-return metrics and chart tables without I/O.
 
     Benchmark is a strictly matched Polars interval table; its metadata requires
     source, basis, currency and frequency. Stopped runs require allow_partial=True
-    and a benchmark explicitly sliced to the actual interval endpoints.
+    and a benchmark explicitly sliced to the actual interval endpoints. Supply
+    exactly one scalar annual RF rate or dated interval RF returns. Sharpe uses
+    portfolio volatility by default; excess_returns explicitly changes its denominator.
     """
     daily, vals, meta = _validated_run(result, allow_partial)
     a = _number(periods_per_year, "periods_per_year", lower=0)
-    rf = _number(risk_free_annual_effective, "risk_free_annual_effective", lower=-1)
+    rf = risk_free_annual_effective
+    rf_table, rf_meta, rf_period = _risk_free(daily, meta["currency"], rf, risk_free_returns, risk_free_metadata, a)
+    if sharpe_denominator not in {"portfolio_returns", "excess_returns"}:
+        raise ValueError("sharpe_denominator must be portfolio_returns or excess_returns")
     mar = _number(minimum_acceptable_return_annual_effective, "minimum_acceptable_return_annual_effective", lower=-1)
     if alignment != "strict":
         raise ValueError("only alignment='strict' is supported")
     try:
-        rf_period, mar_period = math.expm1(math.log1p(rf)/a), math.expm1(math.log1p(mar)/a)
+        mar_period = math.expm1(math.log1p(mar)/a)
     except OverflowError as exc:
         raise ValueError("periodic hurdle is not representable") from exc
     r = daily["simple_return"].to_list()
-    n, root = len(r), math.sqrt(a)
+    n = len(r)
     rows = []
 
     def add(name, value, unit, status="ok", count=n):
@@ -132,24 +174,15 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
         dd.append(row["equity"]/peak-1)
     drawdowns = vals.with_columns(pl.Series("drawdown", dd, dtype=pl.Float64))
     currency = meta["currency"]
-    for name, value, unit in [
-        ("ending_equity", daily["equity"][-1], currency),
-        ("cumulative_pnl", daily["cumulative_pnl"][-1], currency),
-        ("cumulative_simple_return", math.fsum(r), "fraction"),
-        ("compounded_return", daily["compounded_return"][-1], "fraction"),
-        ("annualized_arithmetic_mean", mean(r)*a, "fraction/year"),
-        ("max_drawdown", min(dd), "fraction")]:
-        add(name, value, unit)
-    vol = stdev(r) if n >= 2 else None
-    excess = [x-rf_period for x in r]
-    downside = math.sqrt(mean(min(x-mar_period, 0)**2 for x in r))
-    add("annualized_volatility", vol*root if vol is not None else None, "fraction/sqrt(year)",
-        "ok" if n >= 2 else "insufficient_samples")
-    add("sharpe", root*mean(excess)/vol if vol and n >= 2 else None, "ratio",
-        "insufficient_samples" if n < 2 else "zero_volatility" if not vol else "ok")
-    add("sortino", root*mean(x-mar_period for x in r)/downside if downside and n >= 2 else None, "ratio",
-        "insufficient_samples" if n < 2 else "zero_downside_risk" if not downside else "ok")
-    summary = pl.DataFrame(rows, schema=METRIC_SCHEMA, orient="row")
+    summary = _summary(r, rf_table["simple_return"].to_list(), a, mar_period, sharpe_denominator,
+        currency, daily["equity"][-1], daily["cumulative_pnl"][-1], daily["compounded_return"][-1], min(dd))
+    extra = [("entry_cost", result.trades.filter(pl.col("execution") == "entry_close")["trade_cost"].sum(), currency, n, "ok"),
+             ("financing_cost", result.costs.filter(pl.col("component") == "borrowing_interest")["amount"].sum(), currency, n, "ok"),
+             ("ending_leverage", daily["gross_leverage"][-1], "ratio", n,
+              "ok" if daily["gross_leverage"][-1] is not None else "nonpositive_equity")]
+    summary = pl.concat([summary, pl.DataFrame(extra, schema=METRIC_SCHEMA, orient="row")])
+    benchmark_summary = pl.DataFrame(schema=METRIC_SCHEMA)
+    cumulative_rows = _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), r, "portfolio")
     rows = []
     benchmark_series = pl.DataFrame(schema={"session": pl.Date, "equity": pl.Float64})
     bm_meta = None
@@ -157,18 +190,8 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
         if benchmark_metadata is not None:
             raise ValueError("benchmark_metadata requires a benchmark")
     else:
-        b = _table(benchmark, BENCHMARK_SCHEMA, "benchmark", ["session"], nonempty=True).sort("session")
-        if not b.select("period_start", "session").equals(daily.select("period_start", "session")):
-            raise ValueError("benchmark intervals must match both endpoints exactly (strict alignment)")
-        if (b["simple_return"] <= -1).any():
-            raise ValueError("benchmark returns must preserve positive wealth")
-        if not isinstance(benchmark_metadata, dict) or any(
-            not isinstance(benchmark_metadata.get(k), str) or not benchmark_metadata[k].strip()
-            for k in ("source", "basis", "currency", "frequency")):
-            raise ValueError("benchmark_metadata requires source, basis, currency and frequency")
-        if benchmark_metadata["currency"] != currency or benchmark_metadata["frequency"] != "1d":
-            raise ValueError("benchmark currency/frequency must match the portfolio")
-        bm_meta = deepcopy(benchmark_metadata)
+        b, bm_meta = _aligned_returns(benchmark, daily.select("period_start", "session"),
+            benchmark_metadata, currency, "benchmark")
         br = b["simple_return"].to_list()
         corr, beta, corr_status, beta_status = _pair(r, br)
         add("return_correlation", corr, "correlation", corr_status)
@@ -178,6 +201,19 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
             wealth.append(wealth[-1]*(1+value))
             if not math.isfinite(wealth[-1]) or wealth[-1] <= 0:
                 raise ValueError("benchmark wealth is not representable")
+        peak_b, drawdowns_b = wealth[0], []
+        for value in wealth:
+            peak_b = max(peak_b, value)
+            drawdowns_b.append(value/peak_b-1)
+        benchmark_summary = _summary(br, rf_table["simple_return"].to_list(), a, mar_period,
+            sharpe_denominator, currency, wealth[-1], wealth[-1]-wealth[0], wealth[-1]/wealth[0]-1, min(drawdowns_b))
+        self_corr, self_beta, self_corr_status, self_beta_status = _pair(br, br)
+        benchmark_summary = pl.concat([benchmark_summary, pl.DataFrame([
+            ("return_correlation", self_corr, "correlation", n, self_corr_status),
+            ("beta", self_beta, "ratio", n, self_beta_status),
+            ("entry_cost", 0., currency, n, "not_modeled"),
+            ("financing_cost", 0., currency, n, "not_modeled")], schema=METRIC_SCHEMA, orient="row")])
+        cumulative_rows += _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), br, "benchmark")
         total = wealth[-1]/wealth[0]-1
         add("benchmark_compounded_return", total, "fraction")
         add("compounded_return_difference", 100*(daily["compounded_return"][-1]-total), "percentage_points")
@@ -196,6 +232,7 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
     if not math.isclose(attribution["pnl"].sum(), daily["pnl"].sum(), rel_tol=1e-10, abs_tol=1e-8):
         raise ValueError("dollar attribution does not reconcile")
     meta.update(periods_per_year=a, risk_free_annual_effective=rf, risk_free_periodic=rf_period,
+                risk_free=rf_meta, sharpe_denominator=sharpe_denominator,
                 minimum_acceptable_return_annual_effective=mar, minimum_acceptable_return_periodic=mar_period,
                 ddof=1, sortino_denominator="all_observations", alignment=alignment,
                 annualization="sqrt_periods_per_year_no_serial_correlation_adjustment",
@@ -206,7 +243,10 @@ def performance(result, *, periods_per_year, risk_free_annual_effective,
                     if meta.get("strategy") == "scheduled_rebalance" else
                     "pre_entry_post_entry_and_session_closes"))
     return PerformanceResult(summary, comparison, benchmark_series, daily.clone(), vals.clone(),
-                             drawdowns, allocation.sort("session", "component"), attribution, meta)
+                             drawdowns, allocation.sort("session", "component"), attribution, meta,
+        pl.DataFrame(cumulative_rows, schema={"session": pl.Date, "series": pl.String,
+            "cumulative_simple_return": pl.Float64, "compounded_return": pl.Float64, "wealth": pl.Float64}, orient="row"),
+        benchmark_summary, rf_table)
 
 
 def correlation(result) -> CorrelationResult:

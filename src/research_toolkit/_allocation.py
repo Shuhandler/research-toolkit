@@ -6,7 +6,8 @@ from statistics import mean, stdev
 
 import polars as pl
 
-from ._metrics import _number as _metric_number, _validated_run
+from ._metrics import _validated_run, _pair
+from ._risk_free import _risk_free, _aligned_returns
 from ._portfolio import _number, _weights
 from ._rebalancing import _limit
 from ._results import AllocationResult, RiskResult, RollingRiskResult
@@ -43,10 +44,10 @@ def _window(result, decision_session, lookback, periods_per_year):
 
 
 def inverse_volatility_weights(result, *, decision_session, lookback,
-                               periods_per_year, max_asset_weight) -> AllocationResult:
+                               periods_per_year, max_asset_weight, cap_policy="raise") -> AllocationResult:
     """Normalize inverse sample volatility from a strictly pre-decision window.
 
-    Flat/insufficient samples raise; concentration breaches raise without clipping.
+    Flat/insufficient samples raise. Caps reject by default; redistribution is opt-in.
     Result weights use risky-asset proportions, independently of portfolio leverage.
     """
     series, meta = _window(result, decision_session, lookback, periods_per_year)
@@ -57,13 +58,43 @@ def inverse_volatility_weights(result, *, decision_session, lookback,
     inv = {a: min(vols.values())/vols[a] for a in vols}
     total = math.fsum(inv.values())
     weights = {a: v/total for a, v in inv.items()}
+    original = weights.copy()
+    if cap_policy not in {"raise", "redistribute"}:
+        raise ValueError("cap_policy must be raise or redistribute")
+    cap = _number(max_asset_weight, "max_asset_weight", positive=True)
+    if cap > 1:
+        raise ValueError("max_asset_weight must be in (0, 1]")
+    if cap_policy == "redistribute":
+        if len(weights)*cap < 1:
+            raise ValueError("infeasible concentration cap: asset_count * cap < 1")
+        # Water filling preserves inverse-volatility proportions among uncapped assets.
+        free, weights = set(inv), {}
+        while free:
+            remaining = 1-math.fsum(weights.values())
+            total = math.fsum(inv[a] for a in free)
+            if total <= 0:
+                raise ValueError("inverse-volatility proportions are not representable")
+            proposed = {a: remaining*inv[a]/total for a in sorted(free)}
+            bound = [a for a in proposed if proposed[a] > cap]
+            if not bound:
+                weights.update(proposed)
+                break
+            weights.update({a: cap for a in bound})
+            free.difference_update(bound)
+        weights = dict(sorted(weights.items()))
     _limit(weights, max_asset_weight)
+    if not math.isclose(math.fsum(weights.values()), 1., rel_tol=0, abs_tol=1e-12):
+        raise ArithmeticError("capped allocation weights do not sum to one")
     table = pl.DataFrame({"asset": list(weights), "weight": list(weights.values())})
     estimates = pl.DataFrame({"asset": list(vols), "annualized_volatility": list(vols.values()),
                              "n_obs": [lookback]*len(vols)})
     meta.update(method="inverse_volatility", max_asset_weight=float(max_asset_weight),
+                cap_policy=cap_policy,
                 weight_denominator="risky_asset_notional", volatility_unit="fraction/sqrt(year)")
-    return AllocationResult(table, estimates, meta)
+    diagnostics = pl.DataFrame({"asset": list(weights), "uncapped_weight": [original[a] for a in weights],
+        "weight_change": [weights[a]-original[a] for a in weights],
+        "at_cap": [math.isclose(weights[a], cap, rel_tol=0, abs_tol=1e-12) for a in weights]})
+    return AllocationResult(table, estimates, meta, diagnostics)
 
 
 def risk_contributions(result, *, weights, gross_leverage, decision_session,
@@ -115,8 +146,10 @@ def risk_contributions(result, *, weights, gross_leverage, decision_session,
     return RiskResult(values, covariance, meta)
 
 
-def rolling_risk(result, *, window, periods_per_year, risk_free_annual_effective,
-                 allow_partial=False) -> RollingRiskResult:
+def rolling_risk(result, *, window, periods_per_year, risk_free_annual_effective=None,
+                 allow_partial=False, risk_free_returns=None, risk_free_metadata=None,
+                 sharpe_denominator="portfolio_returns", benchmark=None,
+                 benchmark_metadata=None) -> RollingRiskResult:
     """Realized net-return trailing risk through each close, for reporting only.
 
     Full windows are required. Early rows retain nulls with sample counts/status;
@@ -126,28 +159,42 @@ def rolling_risk(result, *, window, periods_per_year, risk_free_annual_effective
         raise ValueError("window must be an integer >= 2")
     daily, _, meta = _validated_run(result, allow_partial)
     a = _number(periods_per_year, "periods_per_year", positive=True)
-    rf = _metric_number(risk_free_annual_effective, "risk_free_annual_effective", lower=-1)
-    try:
-        periodic = math.expm1(math.log1p(rf)/a)
-    except OverflowError as exc:
-        raise ValueError("periodic risk-free rate is not representable") from exc
+    rf = risk_free_annual_effective
+    rf_table, rf_meta, periodic = _risk_free(daily, meta["currency"], rf, risk_free_returns, risk_free_metadata, a)
+    if sharpe_denominator not in {"portfolio_returns", "excess_returns"}:
+        raise ValueError("sharpe_denominator must be portfolio_returns or excess_returns")
+    br, bm_meta = None, None
+    if benchmark is not None:
+        b, bm_meta = _aligned_returns(benchmark, daily.select("period_start", "session"), benchmark_metadata, meta["currency"], "benchmark")
+        br = b["simple_return"].to_list()
+    elif benchmark_metadata is not None:
+        raise ValueError("benchmark_metadata requires a benchmark")
     returns = daily["simple_return"].to_list()
+    rf_values = rf_table["simple_return"].to_list()
     rows = []
     for i, day in enumerate(daily["session"]):
         start = max(0, i-window+1)
         values = returns[start:i+1]
         vol = stdev(values) if len(values) == window else None
-        sharpe = math.sqrt(a)*mean(v-periodic for v in values)/vol if vol else None
+        excess = [v-f for v, f in zip(values, rf_values[start:i+1])]
+        sv = stdev(excess) if len(values) == window and sharpe_denominator == "excess_returns" else vol
+        sharpe = math.sqrt(a)*mean(excess)/sv if sv else None
         annual = vol*math.sqrt(a) if vol is not None else None
         if any(v is not None and not math.isfinite(v) for v in (annual, sharpe)):
             raise ValueError("rolling risk is not representable")
+        corr, beta, cs, bs = (None, None, "no_benchmark", "no_benchmark")
+        if br is not None:
+            corr, beta, cs, bs = _pair(values, br[start:i+1]) if len(values) == window else (None, None, "insufficient_samples", "insufficient_samples")
         rows.append((day, daily["period_start"][start], len(values), annual, sharpe,
             "insufficient_samples" if vol is None else "ok",
-            "insufficient_samples" if vol is None else "zero_volatility" if vol == 0 else "ok"))
+            "insufficient_samples" if sv is None else ("zero_excess_volatility" if sharpe_denominator == "excess_returns" else "zero_volatility") if sv == 0 else "ok",
+            beta, corr, bs, cs))
     table = pl.DataFrame(rows, schema={"session": pl.Date, "period_start": pl.Date,
         "n_obs": pl.Int64, "annualized_volatility": pl.Float64, "sharpe": pl.Float64,
-        "volatility_status": pl.String, "sharpe_status": pl.String}, orient="row")
+        "volatility_status": pl.String, "sharpe_status": pl.String, "beta": pl.Float64, "correlation": pl.Float64,
+        "beta_status": pl.String, "correlation_status": pl.String}, orient="row")
     meta.update(window=window, periods_per_year=a, risk_free_annual_effective=rf,
         risk_free_periodic=periodic, ddof=1, information_cutoff="through_current_close_reporting_only",
+        risk_free=rf_meta, sharpe_denominator=sharpe_denominator, benchmark=bm_meta,
         annualization="sqrt_periods_per_year_no_serial_correlation_adjustment", allow_partial=allow_partial)
     return RollingRiskResult(table, meta)

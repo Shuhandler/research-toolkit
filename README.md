@@ -28,8 +28,12 @@ an implicit terminal sale. This is a research simulator, not a broker execution 
 
 Scheduled portfolios use dated targets, explicit funding policies, concentration
 checks and actual quantity-changing trades. Risk contributions, rolling risk,
-turnover and exposure views are available. Later work covers signals, short
-positions, richer trading costs, intraday inputs and chronological research workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
+turnover and exposure views are available. Notebook extensions add capped inverse
+volatility, square-root impact and cost-aware sizing, dated risk-free reporting,
+rolling beta/correlation, cumulative plots, comparison tables and an offline Yahoo
+chart adapter. See the [migration guide and contracts](docs/notebook-extensions.md)
+and [runnable workflow](examples/research_workflow.py). Later work covers signals,
+short positions, fixed/minimum ticket fees, intraday inputs and chronological research workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
 
 ## Usage
 

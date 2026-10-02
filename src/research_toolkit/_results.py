@@ -55,6 +55,7 @@ class BacktestResult:
     turnover: pl.DataFrame
     dividend_reinvestments: pl.DataFrame
     financing_accruals: pl.DataFrame
+    execution_costs: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
     stop_reason: str | None = None
@@ -81,6 +82,9 @@ class PerformanceResult:
     allocation: pl.DataFrame
     attribution: pl.DataFrame
     metadata: dict[str, Any]
+    cumulative: pl.DataFrame
+    benchmark_summary: pl.DataFrame
+    risk_free_returns: pl.DataFrame
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,7 @@ class AllocationResult:
     weights: pl.DataFrame
     estimates: pl.DataFrame
     metadata: dict[str, Any]
+    diagnostics: pl.DataFrame
 
 
 @dataclass(frozen=True)
@@ -112,4 +117,43 @@ class RiskResult:
 class RollingRiskResult:
     """Prepared trailing net-return risk diagnostics, retaining run status/coverage."""
     values: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RiskFreeResult:
+    """Explicit holding-period risk-free returns and their daily rate inputs."""
+    values: pl.DataFrame
+    daily_rates: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LiquidityResult:
+    """Daily volatility and dollar ADV estimated strictly before a decision."""
+    estimates: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ExecutionResult:
+    """Per-order cost estimates, with sizing/accounting assumptions when applicable."""
+    orders: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ComparisonResult:
+    """Long-form scenario metrics and explicit coverage/assumption differences."""
+    values: pl.DataFrame
+    diagnostics: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProviderDataResult:
+    """Converted market inputs and provider bars with declared adjustment semantics."""
+    market: MarketData
+    bars: pl.DataFrame
+    diagnostics: pl.DataFrame
     metadata: dict[str, Any]

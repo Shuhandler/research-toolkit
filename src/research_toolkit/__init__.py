@@ -5,6 +5,7 @@ from ._rebalancing import RebalancePolicy
 from ._allocation import inverse_volatility_weights, risk_contributions, rolling_risk
 from ._results import AllocationResult, RiskResult, RollingRiskResult
 from ._costs import TradeCosts
+from ._execution import SquareRootImpactCosts, estimate_liquidity, estimate_trade_costs, size_entry_orders
 from ._data import prepare_market_data
 from ._financing import Financing
 from ._sofr import SOFRFinancing
@@ -12,15 +13,21 @@ from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, equal_weights
 from ._results import BacktestResult, MarketData, ReturnResult, PerformanceResult, CorrelationResult
 from ._metrics import performance, correlation
+from ._risk_free import risk_free_returns
+from ._comparison import compare_performance
+from ._results import RiskFreeResult, ComparisonResult, LiquidityResult, ExecutionResult, ProviderDataResult
 from ._snapshots import save_snapshot, load_snapshot
-from . import plots
+from . import plots, adapters
 from ._returns import cumulative_returns, returns
 
 __all__ = [
+    "SquareRootImpactCosts", "estimate_liquidity", "estimate_trade_costs", "size_entry_orders",
+    "risk_free_returns", "compare_performance", "RiskFreeResult", "ComparisonResult",
+    "LiquidityResult", "ExecutionResult", "ProviderDataResult",
     "SOFRFinancing",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",
     "AllocationResult", "RiskResult", "RollingRiskResult", "scheduled_rebalance", "RebalancePolicy", "prepare_market_data", "returns", "cumulative_returns", "equal_weights", "buy_and_hold",
-    "performance", "correlation", "save_snapshot", "load_snapshot", "plots",
+    "performance", "correlation", "save_snapshot", "load_snapshot", "plots", "adapters",
     "PerformanceResult", "CorrelationResult", "MarketData", "ReturnResult", "BacktestResult", "BuyHoldPolicy", "TradeCosts", "Financing",
 ]

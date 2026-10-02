@@ -15,6 +15,10 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_returns.py` | Simple/log returns and cumulative transformations | 1A |
 | `_results.py` | Concrete validated data/result containers | As their consumers arrive |
 | `_portfolio.py` | Equal/custom weights, exposure and drift calculations | 1B |
+| `_execution.py` | Daily liquidity estimates, square-root costs and entry/scheduled nonlinear sizing | Notebook extension |
+| `_risk_free.py` | Explicit dated risk-free alignment and calendar-day conversion | Notebook extension |
+| `_comparison.py` | Prepared numerical scenario tables and mismatch diagnostics | Notebook extension |
+| `adapters.py` | Offline Yahoo chart conversion with explicit adjustment/availability contracts | Notebook extension |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_dividends.py` | Explicit payment-funded reinvestment policy; execution stays in the shared ledger | Post-M2 |
 | `_financing.py` | Explicit fixed cash/loan rates, day count, sweep and margin configuration | 1C |
@@ -261,7 +265,7 @@ receivable/payment model. All plots consume the prepared containers.
 
 [The API](api.md#scheduled-allocation-and-rebalancing--milestone-2) records exact
 schemas, funding/receivable choices, concentration and cost solver limits, units,
-turnover denominators and null reasons. Fixed/nonlinear cost models, signal
+turnover denominators and null reasons. Fixed/minimum ticket fees, signal
 execution, shorts and broker-specific margin rules are still future extensions.
 
 ## Historical funding input boundary
@@ -281,3 +285,20 @@ independently certify the external source's calendar. Source rows and configurat
 are embedded in run metadata as JSON for offline audit/reconstruction. Market
 `save_snapshot`/`load_snapshot` still store market inputs only; callers may store
 SOFR inputs separately using Polars Parquet plus JSON metadata.
+
+## Notebook reuse boundaries — implemented
+
+The [extension contracts](notebook-extensions.md) extend existing allocation,
+performance, rolling-risk and plotting calls. Concrete `LiquidityResult`,
+`ExecutionResult`, `RiskFreeResult`, `ComparisonResult` and `ProviderDataResult`
+carry Polars tables plus assumptions; no plugin framework or backend hierarchy is
+introduced. `_execution` estimates costs without posting events. The shared engine
+binds one frozen liquidity snapshot to each actual execution price, sizes funded
+orders, and alone books the expense. `execution_costs` is a linked audit table.
+
+`_risk_free` validates interval keys and supplies the same rate series to both
+portfolio and benchmark summaries. `_metrics` prepares cumulative and benchmark
+summary tables once. `_comparison` consumes reports without changing samples;
+plots consume their prepared columns. The offline adapter terminates at validated
+`MarketData` and provider audit bars; the simulation never knows Yahoo's format.
+The public adapter namespace does no I/O. No dependencies were added.

@@ -3,8 +3,9 @@
 Milestones 1A–1D and 2 implement the input/return conventions, account funding,
 entry costs, splits, dividends, cash/borrowing interest, debt repayment, and margin
 stops, performance ratios, benchmark comparisons, scheduled targets, allocation
-and risk estimates below. Advanced allocation, CAGR, drawdown durations and
-per-period risk-free curves remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
+and risk estimates below. Capped allocation, nonlinear square-root costs and
+dated risk-free reporting are also implemented. CAGR, drawdown durations and
+advanced allocation remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
 
@@ -248,7 +249,12 @@ simple-return table. The initial scalar convention is
 from calendar-day loan accrual. Record the choice. Annual risk-free/MAR inputs must
 exceed −1; never divide an effective annual rate by A silently.
 
-- Sharpe: `sqrt(A)*mean(r-rf)/std(r-rf)` on matched periods.
+- Sharpe: `sqrt(A)*mean(r-rf)/std(r)` by default, preserving the existing
+  implementation; explicitly select `sharpe_denominator="excess_returns"` for
+  `std(r-rf)`, the reference notebook convention. Both use sample `ddof=1`
+  and exactly matched intervals. They differ when the risk-free return changes.
+  Earlier documentation wrote only `std(r-rf)` while scalar-rate code used
+  `std(r)`; that ambiguity is now resolved explicitly.
 - Sortino: convert the explicit annual minimum acceptable return (MAR) by the same
   effective-rate rule, let `x=r-MAR`, then use
   `sqrt(A)*mean(x)/sqrt(mean(min(x,0)^2))`. The downside denominator uses **all**
@@ -323,8 +329,9 @@ funding. All dividends still follow actual pay dates; reserve is not a second co
 
 M2's monotone proportional-cost solver requires per-asset total rates below 100%
 and `L*sum(w_i*k_i)<1`; unsupported extreme rates/funding fail explicitly. These are
-numerical/model scope limits, not market fee recommendations. Fixed, per-share,
-minimum and nonlinear costs require another tested sizing method before support.
+numerical/model scope limits, not market fee recommendations. The implemented
+`SquareRootImpactCosts` extension uses a separate tested nonlinear solve, including
+per-share commissions; fixed/minimum ticket fees remain unsupported.
 A 1e-13 relative notional tolerance suppresses only representation-level differences;
 other changed quantities create actual trades. No arbitrary minimum turnover or
 fee is inserted. The existing sub-cent currency reconciliation tolerance still applies.
@@ -346,7 +353,8 @@ Inverse-volatility and covariance calculations use common simple-return interval
 ending strictly before the declared decision session. An integer window of at least
 two returns and explicit annualization are required; covariance/std use `ddof=1`.
 A zero-volatility asset cannot receive an inverse-volatility weight; raise rather
-than assigning infinity or dropping it. Concentration failure also raises. The
+than assigning infinity or dropping it. Concentration failure raises by default;
+explicit `cap_policy="redistribute"` water-fills weights within a feasible cap. The
 result retains the sample start/end, prior interval start, count, basis and source.
 
 Raw analytical total returns can explicitly assume `reinvest_ex_close`, using
@@ -482,3 +490,27 @@ get audit rows; no zero-value ledger cost event is invented. Source input identi
 all supplied observations/calendar rows and policy are embedded in run metadata.
 The loan spread/cash rate and balance/capitalization rules are modeling assumptions;
 the benchmark observations retain separate source provenance.
+
+## Notebook extension conventions — implemented
+
+[The extension contracts](notebook-extensions.md) specify the financial details:
+
+- Capped inverse volatility preserves relative inverse-volatility scores among
+  uncapped assets, requires feasible capacity, and never extends the sample cutoff.
+- Square-root impact uses daily volatility, absolute order/dollar ADV, and a
+  nonnegative modeled coefficient. It is a cash expense, separate from spread and
+  commissions. Post-cost equity determines leverage; ordinary actual orders are
+  charged once, while automatic dividend reinvestment remains cost-free.
+- Dated RF returns align both interval endpoints. Daily nominal decimal rates must
+  already be assigned to every calendar accrual day and available by its local
+  midnight. ACT/360 or ACT/365F and simple versus daily compounding are explicit.
+  Missing dates raise. Loan rates/spreads, cash interest and the performance RF
+  benchmark remain distinct. Sortino's constant MAR is unaffected.
+- Rolling benchmark beta/correlation use common complete windows and sample
+  covariance/variance, through the current close, for descriptive reporting.
+- Cumulative sum, compounded return and wealth multiple have different columns
+  and plot labels. Comparison tables retain numerical units, requested/actual
+  coverage, undefined statuses and declared differences without sample intersections.
+- Yahoo Close is split-adjusted. Raw reconstruction needs explicit complete split
+  factors through retrieval, authoritative actions/payment dates, and a calendar.
+  Volume basis and reconstructed close-time availability are disclosed separately.
