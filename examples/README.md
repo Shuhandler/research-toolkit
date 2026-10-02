@@ -164,3 +164,19 @@ No private assignment inputs or network access are used. The library does not
 write/display these files; the example's `main()` explicitly exports them.
 See [the migration guide](../docs/notebook-extensions.md) for provider conversion
 and precise input contracts. Synthetic results are not investment evidence.
+
+## Milestone 3: chronological research and signals
+
+`python examples/chronological_research.py` constructs lagged synthetic returns,
+purges chronological boundaries, fits a training-only standardizer, selects between
+two explicitly trained example predictors on validation, then executes the frozen
+forecast rule at later closes. It records final-test prediction loss and the
+research/signal audits separately from net portfolio performance. Tables and plots
+are explicitly exported to `artifacts/milestone3/`.
+
+The [notebook](chronological_research.ipynb) calls that reusable example workflow,
+displays exclusions, fitted transforms, validation/test losses and audit records,
+and plots the resulting ledger. Run it offline with
+`python examples/run_acceptance.py --milestone 3`. These examples use the existing
+synthetic snapshot only; no private assignment data or downloads. The research
+release remains long-only, daily close execution. See [contracts](../docs/chronological-research.md).

@@ -131,8 +131,8 @@ Engineering decisions made within M2 (not additional user confirmations):
   extension below now implements them in a separate sizing solver. Fixed/minimum
   ticket fees remain deferred.
 
-Next is milestone 3: dated signals and chronological research boundaries, retaining
-these timing and accounting contracts. Real-data research can also begin after
+The subsequent milestone 3 request below implements dated signals and chronological
+research boundaries while retaining these timing and accounting contracts. Real-data research can also begin after
 choosing permitted sources and assumptions.
 
 ## Payment-date reinvestment extension — implemented
@@ -221,3 +221,35 @@ Engineering choices within that request (not extra user confirmations):
 implementation is independently written; no private notebook code/prose/data is
 copied. Later signal/ML work, dated cost-snapshot refresh, fixed/minimum ticket fees,
 live provider acquisition and point-in-time vintage reconstruction remain open.
+
+## Milestone 3 — user request and implemented choices
+
+The user requested implementation of roadmap milestone 3. This adds lagged features,
+chronological train/validation/test partitions, label-horizon/availability purging,
+training-only standardization, audited validation selection/final-test use, and
+dated long-only signal instructions. No short-stock accounting or ML dependency
+was requested or added; those remain separate later work.
+
+Engineering choices exposed by this release (not additional user confirmations):
+
+- Positive lags count supplied sessions; feature decisions are at session closes.
+  Missing input panels raise. Warmup and late source availability remain visible,
+  and later splitting retains all excluded rows with reasons.
+- End dates are inclusive outcome/availability cutoffs, with actual per-row label
+  horizons and optional boundary gaps. The standardizer pools retained training
+  asset rows and uses sample variance; constant features require an explicit policy.
+- Basic supplied prediction selection supports MSE/MAE on validation. Final test is
+  evaluated only for the selected candidate, with an exportable/resumable audit.
+  Repeated test use/reselection stays exploratory. External test access and fresh
+  objects without previous audit history cannot be detected.
+- Signals explicitly choose next supplied close and each-signal or on-change
+  rebalancing. They are already declared weights/leverage, not arbitrary scores.
+  The same scheduled ledger executes them and retains processing/stop provenance.
+- The new example independently fits two tiny models outside the library, fixes a
+  forecast-to-allocation rule, and reports synthetic outputs. No private assignment
+  notebook, provider cache, reference code, push or publication is involved.
+
+[Milestone 3 contracts](chronological-research.md) and the
+[example notebook](../examples/chronological_research.ipynb) record these decisions.
+Next roadmap work is optional walk-forward/model workflows; next-open/intraday
+execution, shorts, lending/collateral and richer execution constraints remain open.

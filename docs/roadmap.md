@@ -1,6 +1,6 @@
 # Implementation roadmap
 
-Milestones 1A–1D and 2 are implemented and tested. The offline synthetic acceptance
+Milestones 1A–1D, 2 and 3 are implemented and tested. The offline synthetic acceptance
 notebook passes the complete financed, corporate-action-aware workflow. This is a
 research release; real-data selection/licensing remains a separate user decision.
 See [the API](api.md) and [examples](../examples/README.md).
@@ -122,17 +122,30 @@ remain distinct. These checks pass, including initial-only equality with
 buy-and-hold, future-observation perturbation, independent event reconstruction,
 pre-trade margin stops, and unpaid-dividend reserve/rejection behavior.
 
-## Milestone 3 — signals and chronological research
+## Milestone 3 — signals and chronological research — implemented
 
-Add lagged features, chronological train/validation/test boundaries, horizon-aware
-purging, dated signals, and an explicit next-supported-execution policy. Do not
-couple signal generation to position accounting. Add long/short only with stock
-loan, dividend obligations, collateral, and financing tests; it can be a separate
-subrelease. Unsupported negative weights still raise until then.
+Daily lagged features retain availability and structural warmup. Explicit
+train/validation/test boundaries purge actual label horizons and delayed label
+publication, with optional session gaps and inspectable exclusions. The concrete
+standardizer fits retained training rows only. `ResearchStudy` selects supplied
+predictions on validation, evaluates only the selected candidate on test, and
+records repeated test use or post-test reselection as exploratory in an exportable
+and resumable audit. It is not a model-training/search framework.
 
-**Acceptance:** changing future observations cannot alter earlier decisions/trades;
-no same-bar close signal earns a past return; transforms fit only training data;
-selection uses validation, and final-test reuse is recorded as exploratory.
+`signal_targets` maps dated long-only instructions to the next supplied session
+close. Each-signal versus on-change rebalancing is explicit. Passing its result to
+`scheduled_rebalance` preserves timing/source audits and uses the existing ledger,
+costs, financing, corporate actions, DRIP and stop rules. Long/short remains a
+separate subrelease requiring stock loan, dividend liabilities and collateral;
+negative weights still raise.
+
+**Acceptance:** future-value perturbations cannot alter earlier features, fitted
+training parameters or prior trades; no signal earns the move into its fill;
+source/label publication cutoffs and horizon purges are checked; validation/test
+keys cannot be interchanged; resumed audit history cannot reset test use. The
+[synthetic workflow](../examples/chronological_research.py) and
+[notebook](../examples/chronological_research.ipynb) demonstrate the complete path.
+See [implemented contracts and limitations](chronological-research.md).
 
 ## Milestone 4 — optional extensions
 
@@ -151,8 +164,8 @@ priority and terminal cash treatment. Per user decision, automatic fractional
 dividend purchases exclude trading costs; ordinary entry/rebalancing remain costed;
 per-payment audits and pre/post-trade margin checks reconcile through the existing
 ledger. Broker-specific DRIP fills/timestamps, tax withholding, per-asset enrollment
-and fixed/minimum fee models remain outside this extension. Milestone 3 is still
-the next planned implementation phase.
+and fixed/minimum fee models remain outside this extension. Milestone 3 adds
+explicit signal-driven target instructions.
 
 ## User-requested historical SOFR extension — implemented
 
@@ -177,4 +190,5 @@ actual-trade reconciliation (including nonlinear scheduled orders), free automat
 dividend purchases, strict interval matching, calendar-day rate availability,
 undefined metric statuses, partial-run/mismatch guards and provider adjustment
 semantics. Assignment notebook migration is intentionally a separate task; the
-private reference remains unchanged. This does not implement milestone 3 signals.
+private reference remains unchanged. Milestone 3 signals were implemented separately
+under the subsequent user request.

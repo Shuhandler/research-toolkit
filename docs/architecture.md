@@ -1,6 +1,6 @@
 # Architecture and extension proposal
 
-Milestones 1A–1D and 2 implement data, returns, allocation, costs, financing, the ledger,
+Milestones 1A–1D, 2 and 3 implement data, returns, allocation, costs, financing, the ledger,
 performance, local snapshots, and optional plotting. [The implemented API](api.md) is authoritative for
 current signatures and schemas. This document also retains later design targets;
 the full financed/performance/plotting acceptance notebook is implemented. Add each
@@ -29,7 +29,9 @@ future module only with working, tested behavior, without stub hierarchies.
 | `plots.py` | Public plotting namespace consuming prepared numerical results | 1D onward |
 | `_allocation.py` | Pre-decision inverse-volatility/covariance estimates and realized rolling risk | 2 |
 | `_rebalancing.py` | Explicit dated-target policy, validation and post-cost basket sizing | 2 |
-| `_research.py` | Lagged features and chronological splits without ML requirements | 3 |
+| `_research.py` | Lagged availability-aware features, purged chronological samples and training-only standardization | 3 |
+| `_research_eval.py` | Validation prediction losses, candidate selection and resumable final-test audit | 3 |
+| `_signals.py` | Explicit dated long-only instructions mapped to later supplied closes | 3 |
 | `data_sources/` | Optional acquisition adapters producing the standard contracts | When needed |
 | `models/` | Optional model comparisons; never a dependency of simulation | 4 |
 
@@ -265,7 +267,7 @@ receivable/payment model. All plots consume the prepared containers.
 
 [The API](api.md#scheduled-allocation-and-rebalancing--milestone-2) records exact
 schemas, funding/receivable choices, concentration and cost solver limits, units,
-turnover denominators and null reasons. Fixed/minimum ticket fees, signal
+turnover denominators and null reasons. Fixed/minimum ticket fees, next-open
 execution, shorts and broker-specific margin rules are still future extensions.
 
 ## Historical funding input boundary
@@ -302,3 +304,21 @@ summary tables once. `_comparison` consumes reports without changing samples;
 plots consume their prepared columns. The offline adapter terminates at validated
 `MarketData` and provider audit bars; the simulation never knows Yahoo's format.
 The public adapter namespace does no I/O. No dependencies were added.
+
+## Milestone 3 concrete boundaries
+
+`_research` validates complete daily source panels, retains per-feature lineage,
+assigns chronological samples, reports all exclusions and fits one concrete
+training-only transform. Result identities guard accidental table mutation.
+`_research_eval` owns only numerical prediction evaluation and a small research
+use audit. It never fits a model, chooses portfolio weights, invokes the ledger
+or generates narrative conclusions. Audit export/resume is explicit caller I/O;
+external holdout access cannot be detected.
+
+`_signals` validates complete dated allocation baskets with observation/publication
+cutoffs, explicitly maps decisions to next supplied closes, and records unchanged
+instructions. `scheduled_rebalance` accepts `SignalResult`, verifies the identical
+market calendar and source identity, then calls the same `_simulate` engine as
+before. It attaches processing/stop status afterward; signal conversion itself
+never sizes positions or books costs. Ordinary target-table behavior is preserved.
+See [contracts](chronological-research.md) for schemas and limitations.

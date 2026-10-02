@@ -56,6 +56,7 @@ class BacktestResult:
     dividend_reinvestments: pl.DataFrame
     financing_accruals: pl.DataFrame
     execution_costs: pl.DataFrame
+    signal_audit: pl.DataFrame
     metadata: dict[str, Any]
     status: str = "complete"
     stop_reason: str | None = None
@@ -157,3 +158,53 @@ class ProviderDataResult:
     bars: pl.DataFrame
     diagnostics: pl.DataFrame
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FeatureResult:
+    """Lagged daily features, availability lineage and explicit unusable rows."""
+    values: pl.DataFrame
+    availability: pl.DataFrame
+    diagnostics: pl.DataFrame
+    sessions: pl.DataFrame
+    metadata: dict[str, Any]
+    snapshot_id: str
+
+
+@dataclass(frozen=True)
+class ResearchSplit:
+    """Chronological samples and excluded rows; labels never fit feature transforms."""
+    train: pl.DataFrame
+    validation: pl.DataFrame
+    test: pl.DataFrame
+    excluded: pl.DataFrame
+    transforms: pl.DataFrame
+    metadata: dict[str, Any]
+    snapshot_id: str
+
+
+@dataclass(frozen=True)
+class ResearchSelection:
+    """Validation losses and the chosen candidate's separately recorded parameters."""
+    scores: pl.DataFrame
+    selected_candidate: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ResearchEvaluation:
+    """Final-test numerical loss with independent/exploratory use and copied audit."""
+    scores: pl.DataFrame
+    audit: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SignalResult:
+    """Dated long-only allocation instructions mapped to later supplied closes."""
+    signals: pl.DataFrame
+    targets: pl.DataFrame
+    audit: pl.DataFrame
+    sessions: pl.DataFrame
+    metadata: dict[str, Any]
+    snapshot_id: str

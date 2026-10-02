@@ -103,8 +103,8 @@ Without an explicit dividend policy, there is no stock reinvestment. Opt-in
 Repeated target-weight multiplication and daily leverage resetting remain separate
 strategies requiring explicit trades.
 
-Later signal strategies must carry observation/availability, decision, order,
-execution, and mark times. A close-derived signal cannot earn the return ending
+Implemented signal instructions carry observation/availability, decision, order
+and next-session-close execution times; the ledger retains actual raw mark times. A close-derived signal cannot earn the return ending
 at that close; a next-open policy needs next-open data. Rebalancing schedules and
 holiday rules must be explicit. Never infer an execution policy from data frequency.
 
@@ -514,3 +514,27 @@ the benchmark observations retain separate source provenance.
 - Yahoo Close is split-adjusted. Raw reconstruction needs explicit complete split
   factors through retrieval, authoritative actions/payment dates, and a calendar.
   Volume basis and reconstructed close-time availability are disclosed separately.
+
+## Chronological research and signal conventions — implemented M3
+
+Lagged features use positive supplied-session offsets, with per-source publication
+lineage and explicit warmup/unavailable statuses. Research end dates are inclusive
+outcome/availability cutoffs. Labels crossing a partition's end or published after
+its cutoff are purged and retained as exclusions; explicit boundary gaps are
+additional decision-session exclusions. Past history may supply held-out lagged
+features, but only retained training rows fit means/sample standard deviations.
+
+Validation selects the lowest declared prediction loss on exactly matching keys.
+Only that candidate can be evaluated on the final-test partition. Repeated test
+use and reselection after test use require an exploratory audit status. Persisted
+history must be supplied on resume; the toolkit cannot detect external test access
+or prove externally computed predictions/universes were constructed causally.
+These loss scores are not net trading returns or performance ratios.
+
+Dated signal weights remain nonnegative risky proportions, separately from gross
+leverage and model coefficients. Explicit next-session-close execution cannot earn
+the move into that close. Each-signal rebalancing may restore drifted exposures;
+on-change rebalancing holds quantities until the supplied instruction changes.
+Neither convention silently chooses the other. Calendar gaps do not create bars,
+and the terminal close remains mark-only. Signal-driven trades share all existing
+cost/funding/receivable/margin/DRIP accounting. See [the full guide](chronological-research.md).

@@ -231,3 +231,41 @@ workflow executes, its preview costs match ledger costs, and exported cumulative
 and rolling-beta figures were inspected. The private reference notebook's SHA-256
 is unchanged. No private data fixtures, downloads, pushes or package publication
 were used.
+
+## Milestone 3 validation
+
+Use synthetic daily calendars, explicit publication times and hand-checkable labels.
+Lagged values cross weekends by session count, preserve null warmup and delayed
+availability, and never mix assets. Missing/null/duplicate inputs and noncausal
+publication timestamps raise. Future-value perturbations leave earlier features
+and training-only means/scales unchanged. An independent transform oracle uses
+training values 1,2,3,3,4,5: mean 3, sample scale sqrt(2).
+
+Chronological tests cover variable label horizons, delayed label publication,
+inclusive cutoff equality, explicit session gaps, trailing test purges, empty
+post-purge partitions and immutable-result validation. Validation predictions must
+match only validation keys. Test keys cannot select a winner; candidate changes,
+unavailable forecasts, incomplete panels and default tied losses raise. Audit
+restore preserves prior test use; repeated/reselected/outside-inspected tests
+stay exploratory, including across copied result snapshots.
+
+Signal oracles include a Friday decision at price 100, Monday fill at 200 and
+Tuesday mark 220: $100 capital buys 0.5 shares and earns $10, never the prior jump.
+Explicit each-signal versus on-change baskets differ under price drift. Cash
+entries/exits, nonlinear costs, unchanged quantities, concentration breaches,
+calendar mismatch, missing/late decisions and the final mark-only session are
+checked. Signal and plain-target ledgers are identical apart from audit metadata;
+stopped signal plans retain blocked/unreached states. Existing event/accounting
+reconciliations and free automatic dividend purchases also apply.
+
+Run the offline end-to-end Python example and milestone 3 notebook, inspect plotted
+outputs and audit tables, and retain core-import checks for optional dependencies.
+No fitted model/backend dependency or network fixture is required.
+
+Milestone 3 verification: 325 offline tests pass on Python 3.14/Polars 1.44.2
+and Python 3.12/Polars 1.30 (48 new checks plus all previous regressions). The
+older Matplotlib stack emits existing dependency deprecation warnings. The Python
+workflow and notebook execute; the executed notebook contains three figures.
+Equity, allocation and drawdown charts were inspected against the numerical output.
+Notebook execution required local Jupyter kernel sockets; no external data access
+was used. `git diff --check` passes, and no new dependencies were introduced.

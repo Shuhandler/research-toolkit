@@ -6,7 +6,7 @@
   Preserve user changes; never reset or overwrite unrelated work. Read
   `docs/project-context.md`, `docs/architecture.md`, and
   `docs/financial-conventions.md` before financial implementation.
-- Milestones 1A–1D and 2 are implemented; read `docs/api.md` for supported behavior.
+- Milestones 1A–1D, 2 and 3 are implemented; read `docs/api.md` for supported behavior.
   Do not implement later functions merely because a proposed signature appears in
   a document. Follow the current user request. Do not create placeholder functions
   or empty class hierarchies for future phases.
@@ -96,6 +96,15 @@
   create tests that merely reproduce an implementation's formulas as its oracle.
 - Unit tests must run offline with synthetic or permitted saved fixtures. Keep
   credentials, private data, provider caches, and large snapshots out of Git.
+- Research features must retain source availability and lag by supplied sessions.
+  Purge label horizons and late publications at chronological boundaries; retain
+  exclusions explicitly. Standardization fits only retained training rows.
+- Signal instructions declare next-session-close execution and each-signal versus
+  on-change rebalancing. Preserve the signal audit, raw-price ledger, terminal
+  mark-only rule and stop status. No same-close signal may earn a preceding move.
+- Keep ResearchStudy audits across sessions. Repeated final-test evaluation or
+  selection after test inspection must stay exploratory; a new object does not
+  make a previously inspected holdout independent. External access is not detected.
 - Preserve an untouched final test sample. Fit transformations only on training
   data; choose models and strategies on validation data. Record any reuse of a
   final test as exploratory, not as independent final-test evidence.

@@ -4,7 +4,7 @@ A notebook-friendly Python library for quantitative trading research: prepare
 market data, construct portfolios, simulate trades, measure performance, and plot
 results through a small, consistent interface.
 
-**Status: milestones 1 (1A–1D) and 2 implemented.** Strict Polars inputs, a financed
+**Status: milestones 1 (1A–1D), 2 and 3 implemented.** Strict Polars inputs, a financed
 buy-and-hold ledger, performance and benchmark tables, optional Matplotlib plots,
 replayable snapshots, inverse-volatility allocation, and scheduled rebalancing
 are implemented. The [acceptance notebook](examples/buy_and_hold_equities.ipynb)
@@ -32,8 +32,14 @@ turnover and exposure views are available. Notebook extensions add capped invers
 volatility, square-root impact and cost-aware sizing, dated risk-free reporting,
 rolling beta/correlation, cumulative plots, comparison tables and an offline Yahoo
 chart adapter. See the [migration guide and contracts](docs/notebook-extensions.md)
-and [runnable workflow](examples/research_workflow.py). Later work covers signals,
-short positions, fixed/minimum ticket fees, intraday inputs and chronological research workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
+and [runnable workflow](examples/research_workflow.py).
+
+Milestone 3 adds lagged features, purged chronological splits, training-only
+standardization, validation/final-test audits and dated long-only signals with
+explicit next-session-close execution. See the [research guide](docs/chronological-research.md)
+and [notebook](examples/chronological_research.ipynb). Later work covers
+short positions, fixed/minimum ticket fees, intraday inputs and walk-forward model
+workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
 
 ## Usage
 

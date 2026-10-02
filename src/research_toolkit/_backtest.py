@@ -17,7 +17,8 @@ from ._financing import Financing, _below_margin
 from ._sofr import SOFRFinancing, _sofr_plan
 from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, _number, _weights
-from ._results import BacktestResult
+from ._results import BacktestResult, SignalResult
+from ._signals import _checked_signals, _attach_signals, SIGNAL_AUDIT_SCHEMA
 from ._rebalancing import RebalancePolicy, _targets, _basket
 
 
@@ -30,6 +31,7 @@ except PackageNotFoundError:
 F, S, D, I = pl.Float64, pl.String, pl.Date, pl.Int64
 UTC = pl.Datetime("us", "UTC")
 SCHEMAS = {
+    "signal_audit": {**SIGNAL_AUDIT_SCHEMA, "status": pl.String},
     "execution_costs": {"trade_id": S, "session": D, **COST_SCHEMA},
     "daily": {"session": D, "period_start": D, "opening_equity": F, "equity": F,
               "pnl": F, "simple_return": F, "log_return": F, "cumulative_pnl": F,
@@ -121,7 +123,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
         raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing or SOFRFinancing")
     policy.__post_init__()
     market = _validated_market(market)
-    table, plans = _targets(targets, market, entry_session, end_session, policy)
+    signals = _checked_signals(targets, market, entry_session, end_session) if isinstance(targets, SignalResult) else None
+    table, plans = _targets(signals.targets if signals else targets, market, entry_session, end_session, policy)
     first_weights, first_leverage, _ = plans[entry_session]
     for _, leverage, _ in plans.values():
         if leverage > 1 and financing.maintenance_equity_ratio is None:
@@ -130,10 +133,12 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
             raise ValueError("target leverage violates maintenance_equity_ratio")
     initial_policy = BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
         fractional_shares=True, initial_gross_leverage=first_leverage, terminal_action="mark_only")
-    return _simulate(market, weights=first_weights, initial_capital=initial_capital,
+    result = _simulate(market, weights=first_weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
         financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
         dividend_reinvestment=dividend_reinvestment)
+
+    return _attach_signals(result, signals) if signals else result
 
 
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,

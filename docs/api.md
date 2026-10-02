@@ -1,4 +1,4 @@
-# Implemented API: milestones 1A–1D and 2
+# Implemented API: milestones 1A–1D, 2 and 3
 
 Use `import research_toolkit as rt`. Core functions are `prepare_market_data`,
 `returns`, `cumulative_returns`, `equal_weights`, `buy_and_hold`, `performance`,
@@ -12,8 +12,10 @@ Result/configuration objects are concrete dataclasses; their tables are Polars
 DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Short positions, signal-driven trading, fixed/minimum ticket fees, provider downloads, and
-chronological model research remain unimplemented. Future
+Short positions, next-open/intraday execution, fixed/minimum ticket fees, provider
+downloads and walk-forward model research remain unimplemented. Milestone 3
+supports daily long-only signal targets and chronological research; see
+[the complete research API](chronological-research.md). Future
 extensions in [architecture](architecture.md) are labeled separately.
 
 ## Validate market data
@@ -548,7 +550,9 @@ result = rt.scheduled_rebalance(
 )
 ```
 
-Targets have the exact schema `decision_session: Date`, `session: Date`,
+`targets` also accepts a `SignalResult` from `rt.signal_targets`, preserving its
+next-session-close timing and signal audit; see [signal contracts](chronological-research.md#dated-signals-and-next-supported-execution).
+Plain target tables have the exact schema `decision_session: Date`, `session: Date`,
 `asset: String`, `weight: Float64`, `gross_leverage: Float64`. The first basket
 executes on `entry_session`. Later execution dates lie strictly before `end_session`
 so the terminal session remains mark-only. Every decision/execution date must be
@@ -899,3 +903,15 @@ See [the implemented extension API](notebook-extensions.md) for exact input and
 result schemas, dated risk-free/Sharpe choices, rolling benchmark metrics,
 comparison mismatch policies, cumulative plots, the nonlinear execution audit,
 and offline Yahoo adjustment/availability requirements.
+
+## Chronological research and signals — milestone 3
+
+Implemented public calls are `lagged_features`, `chronological_split`,
+`standardize`, `ResearchStudy.select`, `ResearchStudy.evaluate_test`, and
+`signal_targets`. `scheduled_rebalance` accepts either its existing target table
+or the concrete `SignalResult`, and `BacktestResult` adds `signal_audit`.
+`FeatureResult`, `ResearchSplit`, `ResearchSelection` and `ResearchEvaluation`
+contain numerical tables, metadata and provenance. Exact schemas, explicit
+policies, timing rules, final-test audit persistence, supported loss functions
+and examples are documented in [the milestone 3 guide](chronological-research.md).
+No model, plotting, provider or new runtime dependency is required.

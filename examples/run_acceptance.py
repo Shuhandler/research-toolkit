@@ -1,8 +1,9 @@
 """Execute the offline notebook with this Python, writing an inspected artifact.
 
 Run from any directory: python /path/to/research-toolkit/examples/run_acceptance.py
-Use --milestone 2 for the scheduled-rebalancing notebook. Sources stay unchanged;
-output lives in artifacts/acceptance/ or artifacts/milestone2/.
+Use --milestone 2 for scheduled rebalancing or 3 for chronological research.
+Sources stay unchanged; outputs live in artifacts/acceptance/, artifacts/milestone2/
+or artifacts/milestone3/.
 """
 import argparse
 from datetime import datetime, timezone
@@ -20,12 +21,12 @@ from jupyter_client.kernelspec import KernelSpec
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--milestone", choices=("1", "2"), default="1")
+    parser.add_argument("--milestone", choices=("1", "2", "3"), default="1")
     milestone = parser.parse_args().milestone
     root = Path(__file__).resolve().parents[1]
-    name = "buy_and_hold_equities" if milestone == "1" else "scheduled_rebalancing"
-    expected_figures = 9 if milestone == "1" else 6
-    output = root / "artifacts" / ("acceptance" if milestone == "1" else "milestone2")
+    name = {"1": "buy_and_hold_equities", "2": "scheduled_rebalancing", "3": "chronological_research"}[milestone]
+    expected_figures = {"1": 9, "2": 6, "3": 3}[milestone]
+    output = root / "artifacts" / ("acceptance" if milestone == "1" else f"milestone{milestone}")
     output.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(output / "matplotlib-cache"))
     os.environ.setdefault("IPYTHONDIR", str(output / "ipython"))
