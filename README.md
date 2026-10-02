@@ -1,194 +1,132 @@
 # research-toolkit
 
-A notebook-friendly Python library for quantitative trading research: prepare
-market data, construct portfolios, simulate trades, measure performance, and plot
-results through a small, consistent interface.
-
-**Status: milestones 1 (1A–1D), 2 and 3 implemented.** Strict Polars inputs, a financed
-buy-and-hold ledger, performance and benchmark tables, optional Matplotlib plots,
-replayable snapshots, inverse-volatility allocation, and scheduled rebalancing
-are implemented. The [acceptance notebook](examples/buy_and_hold_equities.ipynb)
-runs offline on clearly labeled synthetic data. See the [implemented API](docs/api.md).
-
-## Purpose and scope
-
-Built for learning and practical research in Hedge Fund Strategies and Algorithmic
-Trading classes. Calculations should remain understandable, reproducible, and
-auditable while reducing repetitive notebook code. Polars tables are the chosen
-data interface. Machine learning will be optional; ordinary plotting and
-backtesting must never require a model framework.
-
-The current library supports daily, single-currency equity buy-and-hold portfolios:
-raw prices, explicit splits and cash dividends, equal or custom initial weights,
-entry costs, cash holdings, initial leverage, calendar-day financing, and dividend
-cash repayment of debt, plus opt-in payment-date dividend reinvestment. Saved inputs
-run entirely offline. Buy-and-hold never rebalances; scheduled strategies use supplied
-target dates. Either can add explicitly configured dividend purchases. Neither performs
-an implicit terminal sale. This is a research simulator, not a broker execution system.
-
-Scheduled portfolios use dated targets, explicit funding policies, concentration
-checks and actual quantity-changing trades. Risk contributions, rolling risk,
-turnover and exposure views are available. Notebook extensions add capped inverse
-volatility, square-root impact and cost-aware sizing, dated risk-free reporting,
-rolling beta/correlation, cumulative plots, comparison tables and an offline Yahoo
-chart adapter. See the [migration guide and contracts](docs/notebook-extensions.md)
-and [runnable workflow](examples/research_workflow.py).
-
-Milestone 3 adds lagged features, purged chronological splits, training-only
-standardization, validation/final-test audits and dated long-only signals with
-explicit next-session-close execution. See the [research guide](docs/chronological-research.md)
-and [notebook](examples/chronological_research.ipynb). Later work covers
-short positions, fixed/minimum ticket fees, intraday inputs and walk-forward model
-workflows. See the [roadmap](docs/roadmap.md) for scope boundaries.
-
-## Usage
-
-The distribution name is `research-toolkit`; the Python import is:
+A Python library for quantitative trading research in Jupyter notebooks. It handles
+common tasks like preparing market data, building portfolios, running backtests,
+measuring performance, and making plots. Calculations return Polars tables
+with assumptions and diagnostics so you can check how the numbers were produced.
 
 ```python
 import research_toolkit as rt
 ```
 
-Use `rt.prepare_market_data(...)` to validate prices, sessions, action tables, and
-source metadata. `rt.returns(market, method="simple", basis="price")` and
-`rt.cumulative_returns(...)` provide explicitly labeled return arithmetic.
-`rt.equal_weights(...)` or custom weights feed `rt.buy_and_hold(...)`, which returns
-positions, trades, costs, corporate-action events, receivables, daily P&L, equity,
-and reconciliation diagnostics. The first return includes entry costs once.
-Supply `rt.Financing(...)` for borrowing, with explicit rates, day count, cash sweep,
-and maintenance threshold. Runs stop on a breached threshold or nonpositive equity;
-use `result.require_complete()` before treating a result as a full-period run.
+The toolkit currently supports daily, long-only portfolios in one currency,
+including leverage, dividends, splits, trading costs, and financing. You can run
+buy-and-hold, scheduled rebalancing, or strategies driven by dated signals.
 
-The [offline example](examples/unlevered_buy_and_hold.py) supplies a complete small
-synthetic portfolio with a split, dividend, and entry costs. All quantities and
-financial policies are explicit. The [financed example](examples/financed_buy_and_hold.py)
-compares 1× and 2× initial leverage and demonstrates a stopped run.
+## Functions
 
-The [acceptance notebook](examples/buy_and_hold_equities.ipynb) uses five synthetic
-stocks, $100 million starting equity, one calendar year, entry costs, a benchmark,
-and 1×/1.5×/2× financed scenarios. It reports P&L, simple returns, their cumulative
-sum, compounded return, ending equity, return correlation/beta, risk metrics and
-nine chart types. These are example parameters, never library constants.
+The [API documentation](docs/api.md) has arguments, table schemas, and
+complete examples.
 
-```python
-report = rt.performance(
-    result, periods_per_year=252, risk_free_annual_effective=0.03,
-    minimum_acceptable_return_annual_effective=0.0,
-)
-report.summary
-fig, ax = rt.plots.equity(report)  # Optional plot extra.
-```
+### Data and returns
 
-Supply an optional strictly matched benchmark table and its source/basis metadata
-for comparisons. Reports reject stopped runs unless `allow_partial=True` is
-explicit, and plots label their actual coverage and stop reason. Save validated
-inputs with `rt.save_snapshot(market, new_directory)` and replay using
-`rt.load_snapshot(directory)`; loading verifies file hashes and input identity.
-
-The [Milestone 2 notebook](examples/scheduled_rebalancing.ipynb) demonstrates monthly
-inverse-volatility targets, concentration checks, 1.25× financing, actual trade
-costs, turnover, allocation drift and risk diagnostics. Its [short Python workflow](examples/scheduled_rebalancing.py)
-shows how to assemble calls without notebook-specific library logic. Allocation
-estimates exclude the decision session and all future returns; execution occurs
-later. Unpaid dividend funding is an explicit policy. See [the exact API](docs/api.md#scheduled-allocation-and-rebalancing--milestone-2).
-
-## Automatic dividend reinvestment
-
-Pass this optional policy to either `rt.buy_and_hold(...)` or
-`rt.scheduled_rebalance(...)`:
-
-```python
-dividend_reinvestment = rt.DividendReinvestment(
-    execution="first_close_on_or_after_payment",
-    funding="before_debt_repayment",
-    scheduled_collision="rebalance_only",
-    terminal_action="hold_cash",
-)
-# Add dividend_reinvestment=dividend_reinvestment to your backtest call.
-```
-
-This reserves the actual paid dividend to buy fractional shares of the paying
-stock with no commission, spread or impact deducted. Entry and scheduled trades
-retain their configured costs. Choose `"after_debt_repayment"`
-to repay debt first and reinvest only the remaining dividend cash. Neither option
-borrows to fund the purchase. Omitting the policy preserves existing behavior.
-
-Execution assumes payment is available before that day's close; weekend payments
-wait for the next supplied session. Scheduled targets take priority on overlapping
-dates, and no purchase occurs on the final session. A standing instruction can
-reopen a previously sold payer. These are explicit research assumptions, not a
-broker DRIP fill model. `result.dividend_reinvestments` links each paid dividend
-to its trade or other disposition. See the [full contract](docs/api.md#automatic-dividend-reinvestment)
-and the [runnable comparison](examples/dividend_reinvestment.py).
-
-## Historical SOFR financing
-
-Pass `rt.SOFRFinancing(...)` as the `financing` argument to either simulator.
-It accepts saved annual-decimal SOFR observations plus a supplied publication
-calendar, adds an explicit borrowing spread, and supports ACT/360 or ACT/365F.
-Rates become eligible only once published; each accrual date uses the latest rate
-known at midnight in New York. Holiday carry is explicit and age-limited; missing
-expected observations raise. Cash interest remains a separately configured fixed
-rate and day count. Existing `rt.Financing` calls retain fixed-rate behavior.
-
-`result.financing_accruals` records the rate, publication timestamp, opening
-balances and interest for every processed calendar date, including weekends and
-zero-debt dates. Rate data, source metadata and identity are retained for replay.
-See [the complete contract](docs/api.md#historical-sofr-financing) and the
-[runnable offline example](examples/historical_sofr.py). Its rates are deliberately
-synthetic; replace them with permitted, verified historical inputs for research.
-The library does not fetch rates or reconstruct publication vintages automatically.
-
-This model capitalizes interest daily, including weekends. It does not reproduce
-the official SOFR Index, retrospective overnight fixings, or a broker's exact
-margin-loan billing rules.
-
-## Local development
-
-Python 3.12+ is the target. From this checkout:
-
-```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[test,notebook]'
-python -m pytest -q
-python examples/unlevered_buy_and_hold.py
-python examples/financed_buy_and_hold.py
-python examples/run_acceptance.py
-python examples/run_acceptance.py --milestone 2
-```
-
-Run the notebook kernel from that environment. The commands install the local
-checkout; do not install an unrelated package from an index by name. The build
-backend may need downloading. Polars is the only runtime dependency; pytest is an
-optional test dependency. Use `.[plot]` for figures or `.[notebook]` to execute the
-notebook. Core imports do not load Matplotlib, NumPy, pandas, providers, or ML.
-Tests and the example use synthetic inputs and run offline. The implementation was
-validated on Python 3.14.6 with Polars 1.44.2 and Python 3.12.11 with the declared
-minimum Polars 1.30.0 and Matplotlib 3.9.0. The current environment uses Matplotlib
-3.11.2. Both execute the acceptance notebook. Exact replay dependencies are in
-[examples/requirements-acceptance.txt](examples/requirements-acceptance.txt).
-`run_acceptance.py` writes the executed notebook, PNG figures, daily CSV and
-environment/revision provenance under ignored `artifacts/acceptance/` or
-`artifacts/milestone2/`. No new dependencies were added for milestone 2.
-
-## Repository guide
-
-| Location | Purpose |
+| Function | What it does |
 | --- | --- |
-| [AGENTS.md](AGENTS.md) | Durable instructions for coding agents |
-| [Project context](docs/project-context.md) | Goals, confirmed choices, and open decisions |
-| [Implemented API](docs/api.md) | Supported calls, schemas, units, result tables, and limits |
-| [Architecture](docs/architecture.md) | Module boundaries and proposals for later phases |
-| [Financial conventions](docs/financial-conventions.md) | Accounting, timing, units, costs, metrics |
-| [Roadmap](docs/roadmap.md) | Phases and first-release acceptance criteria |
-| [Testing plan](docs/testing-plan.md) | Hand calculations and reconciliation checks |
-| [Reference review](docs/reference-review.md) | Verified findings and license provenance |
-| [examples/](examples/README.md) | Runnable offline examples, snapshots and acceptance notebook |
-| [tests/](tests/README.md) | Offline validation, return arithmetic, and ledger tests |
-| [data/](data/README.md) | Local snapshot policy; no downloaded data |
-| `src/research_toolkit/` | Small public facade backed by focused internal modules |
+| `rt.prepare_market_data(...)` | Validates prices, trading sessions, splits, dividends, and source information. |
+| `rt.returns(...)` | Calculates simple or log returns using an explicit price or total-return basis. |
+| `rt.cumulative_returns(...)` | Calculates summed returns, compounded returns, or wealth multiples. |
+| `rt.save_snapshot(...)` | Saves validated market inputs locally for repeatable research. |
+| `rt.load_snapshot(...)` | Loads a saved snapshot and checks its integrity. |
+| `rt.adapters.yahoo_chart(...)` | Converts supplied Yahoo chart responses into market data and an audit of the conversion. No downloads. |
 
-No reference code has been copied. The reference project's MIT license does not
-automatically license this project. This project's license remains an owner
-decision before external distribution. Nothing has been published or pushed.
+The Yahoo adapter requires explicit price-adjustment information, calendars, and
+dividend payment dates where applicable. It does not assume that a provider's
+“Close” is a raw execution price.
+
+### Allocation and backtesting
+
+| Function | What it does |
+| --- | --- |
+| `rt.equal_weights(...)` | Assigns an equal portfolio weight to each asset. |
+| `rt.inverse_volatility_weights(...)` | Gives lower-volatility assets more weight, using only data before the decision. Can reject or explicitly redistribute weights above a cap. |
+| `rt.buy_and_hold(...)` | Buys an initial portfolio and tracks holdings, cash, debt, dividends, costs, and equity. |
+| `rt.scheduled_rebalance(...)` | Trades toward dated target allocations, using the same accounting as buy-and-hold. |
+| `rt.signal_targets(...)` | Converts dated allocation signals into targets for the next supplied session's close. |
+| `rt.risk_contributions(...)` | Estimates each asset's contribution to portfolio volatility. |
+| `result.require_complete()` | Raises an error if a backtest stopped before its requested end. |
+
+Buy-and-hold lets weights drift without trading. Splits and explicitly enabled
+dividend reinvestment can change quantities. Neither simulator automatically sells
+the portfolio at the end.
+
+### Trading costs and sizing
+
+| Function | What it does |
+| --- | --- |
+| `rt.estimate_liquidity(...)` | Estimates daily volatility and average daily dollar volume from data available before the decision. |
+| `rt.estimate_trade_costs(...)` | Estimates commission, spread, and square-root impact costs for supplied orders. |
+| `rt.size_entry_orders(...)` | Sizes entry orders to pay trading costs and reach the requested leverage relative to equity after costs. |
+
+Order size divided by daily dollar volume is an order/ADV ratio, not intraday
+participation. Cost estimates are previews; the backtest charges costs once, on
+actual trades. Automatic dividend reinvestment has zero trading costs.
+
+### Performance and comparisons
+
+| Function | What it does |
+| --- | --- |
+| `rt.performance(...)` | Builds P&L, return, drawdown, risk, and optional benchmark reports from a backtest. |
+| `rt.correlation(...)` | Calculates correlations between asset returns. |
+| `rt.rolling_risk(...)` | Calculates rolling volatility and Sharpe ratios, plus beta and correlation when a benchmark is supplied. |
+| `rt.risk_free_returns(...)` | Converts dated annual rate observations into holding-period risk-free returns using explicit day-count and compounding rules. |
+| `rt.compare_performance(...)` | Combines scenario reports into a numerical comparison table, with checks for compatible assumptions and coverage. |
+
+Reporting accepts either a constant risk-free rate or dated risk-free returns.
+The risk-free benchmark is separate from borrowing costs and cash interest.
+Summed simple returns, compounded returns, and wealth multiples are kept distinct.
+Stopped runs require explicit partial reporting and retain their stop status.
+
+### Research workflows
+
+| Function | What it does |
+| --- | --- |
+| `rt.lagged_features(...)` | Creates features lagged by supplied trading sessions, keeping availability and warm-up records. |
+| `rt.chronological_split(...)` | Splits data into training, validation, and test periods, excluding labels that cross boundaries or arrive too late. |
+| `rt.standardize(...)` | Fits feature means and standard deviations on retained training rows, then applies them to the splits. |
+| `rt.ResearchStudy(...)` | Creates a study that records candidate selection and final-test use. |
+| `study.select(...)` | Selects among supplied candidate predictions using validation loss. |
+| `study.evaluate_test(...)` | Evaluates the selected candidate on the final test sample. |
+
+These tools do not train models. `study.audit` records evaluations; repeated test
+use must be marked exploratory. Carry the audit into later sessions—the toolkit
+cannot detect test data you inspected elsewhere.
+
+## Backtest settings
+
+Pass these objects to the relevant functions to make your assumptions explicit.
+
+| Object | What it controls |
+| --- | --- |
+| `rt.BuyHoldPolicy(...)` | Entry timing, share sizing, and initial leverage for buy-and-hold. |
+| `rt.RebalancePolicy(...)` | Scheduled execution, dividend-receivable funding, and target concentration limits. |
+| `rt.TradeCosts(...)` | Commission, spread, and impact costs expressed in basis points. |
+| `rt.SquareRootImpactCosts(...)` | Size-dependent impact based on daily volatility and dollar ADV, plus commissions and spreads. |
+| `rt.Financing(...)` | Fixed borrowing and cash-interest rates, day counts, debt repayment, and margin limits. |
+| `rt.SOFRFinancing(...)` | Historical published SOFR plus a borrowing spread, with separately configured cash interest. |
+| `rt.DividendReinvestment(...)` | Reinvestment of paid dividends into the paying asset, including debt-repayment priority. |
+
+SOFR financing needs supplied rates and a publication calendar. It accrues and
+capitalizes interest daily using information available at New York midnight;
+it is a research model, not an exact broker loan contract.
+
+## Plots
+
+All plotting functions return Matplotlib `(fig, ax)` objects. They do not show or
+save figures automatically, and they do not rerun calculations.
+
+| Function | What it plots |
+| --- | --- |
+| `rt.plots.prices(...)` | Asset prices with their adjustment basis labeled. |
+| `rt.plots.pnl(...)` | Daily dollar profit and loss. |
+| `rt.plots.returns(...)` | Daily net simple returns. |
+| `rt.plots.cumulative_returns(...)` | Summed simple returns, compounded returns, or wealth, with an optional benchmark. |
+| `rt.plots.equity(...)` | Portfolio equity and a benchmark when included in the report. |
+| `rt.plots.drawdown(...)` | Declines from the portfolio's previous equity peak. |
+| `rt.plots.distribution(...)` | A histogram of daily simple returns. |
+| `rt.plots.correlation(...)` | A return-correlation heatmap. |
+| `rt.plots.rolling_risk(...)` | A chosen rolling volatility, Sharpe, beta, or correlation series. |
+| `rt.plots.allocation(...)` | Asset, cash, debt, and receivable weights over time. |
+| `rt.plots.attribution(...)` | Dollar P&L broken down by component. |
+| `rt.plots.risk_contributions(...)` | Estimated contributions to portfolio volatility. |
+| `rt.plots.turnover(...)` | Trading volume relative to equity, separating entry, rebalancing, and dividend purchases. |
+| `rt.plots.exposures(...)` | Risky asset value, cash, debt, and receivables in currency units. |
