@@ -24,6 +24,18 @@ migration](long-short.md) for signed schemas, collateral, borrow fees, dividends
 margin, new result fields, and information ratios. The allocation/financing sections
 below describe the original long-only mode unless stated otherwise.
 
+## Fixed dollars and changing liquidity
+
+`scheduled_rebalance` accepts signed `target_notional: Float64` alongside its
+existing quantity and equity-exposure target modes. Pass `costs={decision_date:
+SquareRootImpactCosts(...)}` for exact dated selection, or keep one static model.
+Dollar amounts use execution-session raw prices inside the engine and never
+shrink to pay costs. Full schemas, required policies, cutoff validation and the
+new `target_executions` / `cost_model_selections` audits are documented in
+[fixed dollar rebalancing](fixed-dollar-rebalancing.md). The
+[notebook](../examples/fixed_dollar_rebalancing.ipynb) supplies next-session dates
+and runs three baskets in one ledger.
+
 ## Validate market data
 
 ```python

@@ -601,3 +601,44 @@ holding intervals. Tracking error is `sqrt(A)*sample_std(r-b)`. No second risk-f
 subtraction occurs. At least two intervals are required; zero tracking error yields
 zero reported tracking error and null IR with its reason. A caller-supplied zero
 benchmark is valid and does not make beta against a constant benchmark defined.
+
+## Fixed currency targets and dated execution estimates
+
+Scheduled signed `target_notional` is a predetermined currency amount. At its
+execution close, divide by the raw price and trade against actual shares after
+splits, dividend processing and earlier transactions. Positive/negative/zero mean
+long/short/exit. The absolute amounts, including any hedge, determine gross asset
+exposure; neither capital nor post-cost equity normalizes them. Costs reduce
+equity and affect cash/debt separately. `equity_exposure` still sizes a multiple
+of post-cost equity and `quantity` still specifies exact shares.
+
+No dollar basket itself establishes beta neutrality or portfolio leverage. It
+restores gross dollars only at scheduled executions, within the existing bounded
+currency reconciliation tolerance; exposure drifts afterward. Receivable funding
+must remain `require_target` under the explicit loan. Restricted collateral cannot
+fund longs. Existing entry validation, pre-trade checks, post-trade margin stops
+and stopped coverage are unchanged; costs never cause a substitute smaller target.
+
+Decisions strictly precede supplied execution sessions. Next-session close is an
+explicit caller mapping for ordinary target tables, not a newly inferred policy.
+The final supplied run session remains mark-only. An order cannot capture the move
+ending at its own execution price.
+
+Scheduled `costs` may be one static model or an exact decision-date mapping of
+`SquareRootImpactCosts`. Validate the entire requested mapping, currency, model
+identity, and the full target universe (including exits and hedges) before the run.
+Each dated snapshot must identify that decision, have sample endpoints on supplied
+sessions strictly before it, and declare an availability cutoff between sample-end
+close and decision close. `estimate_liquidity` retains the stricter prior-session
+sample and decision-day local-midnight volume availability rule even when signals
+are formed after the close. No decision-day or execution-day return/volume enters
+that estimate. External snapshot vintage remains a caller declaration.
+
+Select one binding per basket for sizing and fills. Commission, per-share fees,
+spread and nonlinear impact apply to actual absolute changed positions once.
+Daily volatility, dollar ADV and order/ADV retain their existing units; order/ADV
+is not intraday participation. Debit financing, stock borrowing and collateral
+rebate remain separate. Automatic long dividend reinvestment is still free.
+Audit identities and source windows are retained alongside actual cost components;
+no model refresh restarts or stitches the ledger. See
+[exact contracts and numerical tolerances](fixed-dollar-rebalancing.md).

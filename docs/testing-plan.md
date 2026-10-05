@@ -283,3 +283,16 @@ cost-free and cannot consume short payments or auto-cover a now-short payer.
 Tests retain margin/zero/negative-equity failure closes and verify aligned zero-
 benchmark information ratios, coverage guards, allocation weights and plots.
 The full existing long-only suite remains a required regression check.
+
+## Fixed dollar baskets and dated models
+
+`tests/test_dollar_targets.py` uses synthetic hand-checkable books to verify fixed
+gross after gains/losses, cost-funded equity changes, execution-price sizing,
+no preceding move, drift turnover, covers/crossings/zeros, split/dividend/DRIP
+quantities and margin stops. It checks exact dated coverage, exit asset coverage,
+future/late data, currency, model mutation, per-share/spread/nonlinear components,
+once-only debits, and unexecuted model audits. Regression cases compare static and
+dated results for shares, equity exposures and dollars, and exercise legacy long
+weights with dated models. It executes every code cell of the new synthetic
+notebook offline, checking its gross targets and cost reconciliation. The notebook
+is also validated in a real Jupyter kernel for inline numerical output and figures.

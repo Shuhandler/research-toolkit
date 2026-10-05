@@ -113,7 +113,9 @@ $10 collateral then reduces debt to $90 without creating a second profit.
 For signed equity targets `u_i`, current signed values `v_i`, and pre-trade equity
 `E`, solve `x + sum(cost_i(u_i*x - v_i)) = E` for positive post-cost equity `x`.
 For exact quantities, trade the difference between supplied shares and actual
-holdings; pay costs separately. Neither method normalizes the basket to sum to one.
+holdings; pay costs separately. Fixed `target_notional` amounts instead divide by
+the execution raw close; costs are funded separately. No signed mode normalizes
+the basket to sum to one.
 Exposure sizing retains a monotonic-cost condition; extreme configurations that
 cannot guarantee a unique solve are rejected. Insolvent cost funding also raises.
 
@@ -130,7 +132,7 @@ For `rt.scheduled_rebalance(..., long_short=..., stock_borrow=...)`, supply exac
 | `decision_session` | Date |
 | `session` | Date |
 | `asset` | String |
-| `equity_exposure` **or** `quantity` | Float64 |
+| `equity_exposure`, `quantity` **or** `target_notional` | Float64 |
 
 Every basket covers the same universe, including zero exits. Decision sessions
 strictly precede execution sessions. All dates must be supplied sessions, the
@@ -143,7 +145,7 @@ In signed mode this explicitly executes the requested target using the declared
 loan, including funding against unavailable dividend receivables; `reserve` is
 rejected rather than silently shrinking a signed basket. The target concentration
 limit remains absolute asset value divided by gross exposure. It does not constrain
-later drift. Quantity baskets report null `target_gross_leverage`, since they do
+later drift. Quantity and dollar baskets report null `target_gross_leverage`, since they do
 not target a post-cost leverage ratio. Existing long-only schedules and their
 reserve/require-target semantics are unchanged. `SignalResult` still supports
 long-only signals; signed callers supply the dated target table directly.
@@ -282,3 +284,6 @@ The ordinary allocation helpers and signal conversion still produce long-only
 weights. This extension accepts caller-supplied signed positions; it does not select,
 regress, or optimize hedges. Detailed documentation describes modeled economics,
 not a promise that any real broker will finance or execute the portfolio.
+
+Fixed currency targets and exact decision-dated cost models are implemented. See
+[schemas, timing, audit tables and notebook migration](fixed-dollar-rebalancing.md).

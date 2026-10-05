@@ -133,11 +133,14 @@ orders: each bound must be below one and the leverage-weighted sum below one.
 Unsupported extreme inputs raise; the solver does not guess among ambiguous
 solutions. An unchanged basket has no fees. Entry and scheduled calls require
 liquidity estimates dated no later than their decision/execution cutoff and the
-same currency. One model uses one frozen liquidity snapshot throughout a run;
-there is no implicit refresh. Dated model refresh, minimum/fixed-ticket fees,
-volume-constrained execution, shorts and order splitting remain unsupported.
+same currency. One static model keeps its frozen snapshot throughout a run.
+Scheduled calls also accept an exact decision-date mapping of square-root models;
+see [dated costs and dollar targets](fixed-dollar-rebalancing.md). Signed positions
+are supported by the [long/short ledger](long-short.md). Minimum/fixed-ticket fees,
+volume-constrained execution and order splitting remain unsupported.
 
-`BacktestResult.execution_costs` adds `trade_id` and `session` to the cost-breakdown
+`BacktestResult.execution_costs` adds `trade_id`, `session`, `decision_session`, `snapshot_id` and
+`model_id` to the cost-breakdown
 schema for actual square-root-model ordinary fills. It is typed empty for fixed
 bps models. It reconciles with existing `trades`, `costs` and cash events; it is an
 audit view, not an additional debit. Automatic dividend reinvestments retain their

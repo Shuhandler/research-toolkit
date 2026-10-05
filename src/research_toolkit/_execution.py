@@ -107,14 +107,17 @@ class SquareRootImpactCosts:
     half_spread_bps: float | Mapping[str, float]
     impact_coefficient: float | Mapping[str, float]
     snapshot_id: str = field(init=False)
+    model_id: str = field(init=False)
 
     def __post_init__(self):
         table, meta, identity = _liquidity(self.liquidity)
         object.__setattr__(self, "liquidity", LiquidityResult(table, meta))
         object.__setattr__(self, "snapshot_id", identity)
+        config = {}
         for name in ("commission_bps", "commission_per_share", "half_spread_bps", "impact_coefficient"):
-            _parameter(getattr(self, name), table["asset"].to_list(), name)
+            config[name] = _parameter(getattr(self, name), table["asset"].to_list(), name)
             object.__setattr__(self, name, deepcopy(getattr(self, name)))
+        object.__setattr__(self, "model_id", _identity({"liquidity": table}, {"liquidity": meta, "parameters": config}))
 
     def _bind(self, assets, prices, execution_session, decision_session=None, currency=None):
         table, meta, identity = _liquidity(self.liquidity)
@@ -131,16 +134,19 @@ class SquareRootImpactCosts:
             raise ValueError("cost liquidity currency must match the portfolio")
         config = {name: _parameter(getattr(self, name), assets, name) for name in
                   ("commission_bps", "commission_per_share", "half_spread_bps", "impact_coefficient")}
+        if _identity({"liquidity": table}, {"liquidity": meta, "parameters": config}) != self.model_id:
+            raise ValueError("cost-model parameters changed after construction")
         marks = {a: _number(prices[a], f"reference_price[{a}]", positive=True) for a in assets}
-        return _ImpactBinding(table, meta, marks, config, execution_session, self.snapshot_id)
+        return _ImpactBinding(table, meta, marks, config, execution_session, self.snapshot_id, self.model_id, decision_session)
 
 
 class _ImpactBinding:
-    def __init__(self, table, metadata, prices, config, session, snapshot_id):
+    def __init__(self, table, metadata, prices, config, session, snapshot_id, model_id, decision_session):
         self.liquidity = {r["asset"]: r for r in table.iter_rows(named=True)}
         self.prices, self.config = prices, config
         self.metadata = dict(model="square_root_impact", liquidity=metadata, estimates=table.to_dicts(),
-            parameters=config, execution_session=session.isoformat(), snapshot_id=snapshot_id,
+            parameters=config, execution_session=session.isoformat(), snapshot_id=snapshot_id, model_id=model_id,
+            decision_session=decision_session.isoformat() if decision_session else None,
             participation_definition="absolute_order_notional_over_daily_dollar_ADV_not_intraday_participation",
             impact_basis="modeled", fill_policy="reference_price_plus_cash_expenses")
 
@@ -160,6 +166,11 @@ class _ImpactBinding:
         if any(not math.isfinite(v) for k, v in row.items() if k != "asset"):
             raise ValueError("execution cost is not representable")
         return row
+
+    def audit_row(self, asset, notional):
+        return dict(self.row(asset, notional), model_id=self.metadata["model_id"],
+            snapshot_id=self.metadata["snapshot_id"], decision_session=(
+                date.fromisoformat(self.metadata["decision_session"]) if self.metadata["decision_session"] else None))
 
     def components(self, asset, notional):
         row = self.row(asset, notional)
@@ -251,3 +262,42 @@ def _impact_basket(values, equity, receivable, weights, leverage, binding, recei
         else:
             lo = mid
     return evaluate((lo+hi)/2)
+
+
+def _bind_cost_schedule(costs, executions, assets, prices, closes, currency):
+    """Validate every requested basket and freeze one binding per execution.
+
+    A dated mapping requires exact decision keys and explicit source-window and
+    availability declarations. A static model retains its existing contract.
+    """
+    dated = isinstance(costs, Mapping)
+    if dated:
+        if any(type(d) is not date for d in costs):
+            raise ValueError("cost-model keys must be decision dates")
+        if set(costs) != set(executions.values()) or None in executions.values():
+            raise ValueError("dated costs require exact coverage of all scheduled decision dates")
+        if any(not isinstance(m, SquareRootImpactCosts) for m in costs.values()):
+            raise ValueError("dated costs must map decision dates to SquareRootImpactCosts")
+        models = dict(costs)
+    else:
+        models = None
+    bindings = {}
+    for session, decision in executions.items():
+        model = models[decision] if dated else costs
+        binding = model._bind(assets, {a: prices[session, a] for a in assets}, session, decision, currency)
+        if dated:
+            meta = binding.metadata["liquidity"]
+            if meta["decision_session"] != decision.isoformat():
+                raise ValueError("dated model decision_session must match its exact mapping key")
+            try:
+                start, end = date.fromisoformat(meta["sample_start"]), date.fromisoformat(meta["sample_end"])
+                available = datetime.fromisoformat(meta["decision_at"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("dated liquidity requires ISO sample_start, sample_end and timezone-aware decision_at") from exc
+            if start not in closes or end not in closes or not start <= end < decision:
+                raise ValueError("dated liquidity sample must use supplied sessions strictly before its decision")
+            if (available.tzinfo is None or available.utcoffset() is None
+                    or not closes[end] <= available <= closes[decision]):
+                raise ValueError("dated liquidity availability must follow its sample and be no later than the decision close")
+        bindings[session] = binding
+    return bindings

@@ -136,9 +136,9 @@ def _signed_targets(targets, market, entry, end):
         raise ValueError("entry/end must be dates with at least one holding interval")
     if not isinstance(targets, pl.DataFrame):
         raise ValueError("signed scheduled targets must be a Polars table")
-    columns = [c for c in ("equity_exposure", "quantity") if c in targets.columns]
+    columns = [c for c in ("equity_exposure", "quantity", "target_notional") if c in targets.columns]
     if len(columns) != 1:
-        raise ValueError("signed targets require exactly one of equity_exposure or quantity")
+        raise ValueError("signed targets require exactly one of equity_exposure, quantity or target_notional")
     col = columns[0]
     table = _table(targets, {"decision_session": pl.Date, "session": pl.Date,
         "asset": pl.String, col: pl.Float64}, "signed targets", ["session", "asset"], nonempty=True).sort("session", "asset")
@@ -164,16 +164,21 @@ def _signed_targets(targets, market, entry, end):
 
 
 def _signed_size(values, equity, targets, kind, prices, components, marginal):
-    """Solve equity after costs, or retain exact quantities; never post a cost."""
+    """Solve equity after costs, or retain exact shares/dollars; never post a cost."""
     def evaluate(after):
-        desired = {a: targets[a] * (prices[a] if kind == "quantity" else after) for a in targets}
+        if kind == "quantity":
+            desired = {a: targets[a]*prices[a] for a in targets}
+        elif kind == "target_notional":
+            desired = targets
+        else:
+            desired = {a: targets[a]*after for a in targets}
         changes = {a: 0. if math.isclose(desired[a], values[a], rel_tol=1e-13, abs_tol=0)
                    else desired[a]-values[a] for a in targets}
         return changes, math.fsum(math.fsum(components(a, n).values()) for a, n in changes.items())
-    if kind == "quantity":
+    if kind in {"quantity", "target_notional"}:
         changes, fee = evaluate(equity)
         if fee >= equity:
-            raise ValueError("insufficient equity for supplied quantities and trade costs")
+            raise ValueError("insufficient equity for fixed targets and trade costs")
         return changes, fee
     bounds = {a: max(abs(values[a]), abs(targets[a]*equity-values[a])) for a in targets}
     if math.fsum(abs(targets[a])*marginal(a, bounds[a]) for a in targets) >= 1:

@@ -293,3 +293,35 @@ user confirmations:
 
 See [contracts and notebook migration](long-short.md) and
 [the runnable comparison](../examples/long_short_hedge.py).
+
+## Fixed dollar baskets and dated execution models — implemented
+
+User request: support predetermined signed dollar targets and changing pre-decision
+liquidity models in one scheduled ledger. The next notebook may rank stocks by
+momentum and supply a beta hedge, then scale the **entire** basket, including the
+hedge, to $2 million gross against $1 million initial equity. These capital values,
+signal rules, assets and hedge selection belong to the application, never defaults.
+Signals are intended for next-session-close execution.
+
+Routine engineering choices made within that request:
+
+- Extend the existing signed target schema with `target_notional: Float64`; retain
+  `session` for execution and `decision_session` for instruction time. Divide by
+  execution raw prices in the engine. Costs affect equity/funding without scaling
+  the target. Quantities and equity exposures retain their separate meanings.
+- Accept `costs={decision_date: SquareRootImpactCosts(...)}` with exact complete
+  decision keys and full asset coverage, including zero exits and hedges. Static
+  models are unchanged. Dated models require explicit sample endpoints and cutoff
+  metadata and are bound once per basket for sizing and execution.
+- Keep `estimate_liquidity` strictly prior-session and its local-midnight volume
+  availability cutoff. Do not quietly extend it to decision-day data for an
+  after-close signal. Record both model and liquidity identities.
+- Preserve explicit `require_target` financing, segregated collateral, side-specific
+  research margin, zero-cost long DRIP, SOFR and stopped runs. Plain tables still
+  allow an explicitly chosen later supplied session; the notebook chooses the next
+  one. The final session is still mark-only.
+- Add numerical target/model audits and an offline synthetic notebook. No momentum,
+  regression, hedge optimization, downloads or export behavior enters the core.
+
+No new financial choice needed user clarification. See [API and migration](fixed-dollar-rebalancing.md)
+and [the runnable notebook](../examples/fixed_dollar_rebalancing.ipynb).

@@ -40,7 +40,7 @@ dividend payment dates where applicable. It does not assume that a provider's
 | `rt.equal_weights(...)` | Assigns an equal portfolio weight to each asset. |
 | `rt.inverse_volatility_weights(...)` | Gives lower-volatility assets more weight, using only data before the decision. Can reject or explicitly redistribute weights above a cap. |
 | `rt.buy_and_hold(...)` | Opens a portfolio from long weights, signed equity exposures, or exact signed quantities, then tracks its holdings and accounts. |
-| `rt.scheduled_rebalance(...)` | Trades toward dated allocations or signed position targets, using the same accounting as buy-and-hold. |
+| `rt.scheduled_rebalance(...)` | Trades toward dated weights, signed equity exposures, shares, or fixed dollar targets. |
 | `rt.signal_targets(...)` | Converts dated allocation signals into targets for the next supplied session's close. |
 | `rt.risk_contributions(...)` | Estimates each asset's contribution to portfolio volatility. |
 | `result.require_complete()` | Raises an error if a backtest stopped before its requested end. |
@@ -60,6 +60,9 @@ the portfolio at the end.
 Order size divided by daily dollar volume is an order/ADV ratio, not intraday
 participation. Cost estimates are previews; the backtest charges costs once, on
 actual trades. Automatic dividend reinvestment has zero trading costs.
+For scheduled runs, pass one static cost model or a model for each decision date.
+The [fixed-dollar notebook](examples/fixed_dollar_rebalancing.ipynb) shows a
+long/short basket with a hedge and updated liquidity estimates.
 
 ### Performance and comparisons
 

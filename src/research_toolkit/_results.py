@@ -51,6 +51,8 @@ class BacktestResult:
     receivables: pl.DataFrame
     diagnostics: pl.DataFrame
     targets: pl.DataFrame
+    target_executions: pl.DataFrame
+    cost_model_selections: pl.DataFrame
     rebalances: pl.DataFrame
     turnover: pl.DataFrame
     dividend_reinvestments: pl.DataFrame

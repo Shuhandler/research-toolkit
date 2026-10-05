@@ -347,3 +347,26 @@ and prepares signed balance-sheet allocation. Plots consume those prepared table
 comparison tables retain consistent capital/coverage and numerical status. No
 provider, plotting, model training or new runtime dependency enters simulation.
 See [the signed API and assumptions](long-short.md).
+
+## Fixed dollars and dated costs — implemented
+
+`_shorts._signed_targets` extends the existing complete-basket schema with mutually
+exclusive `target_notional`. `_signed_size` previews fixed dollar differences as
+well as exact shares and equity exposures; it never posts costs. Execution-session
+raw prices remain inside `_backtest._simulate`, which uses the same signed basket,
+corporate-action, collateral, financing, margin and stop paths.
+
+`_execution._bind_cost_schedule` validates either one static model or an exact
+mapping from decisions to `SquareRootImpactCosts`. It freezes a binding once for
+each requested execution, including entry, with that day's reference prices for
+share commissions. Liquidity and assumptions remain those of the earlier decision.
+The simulator reuses the binding for sizing and actual charges without refreshing
+or restarting the ledger. Model identity includes both snapshot and normalized
+cost parameters; snapshot identity remains separately available.
+
+`BacktestResult.target_executions` records requested/actual dollar positions and
+residuals; `cost_model_selections` links requested baskets to executed/unexecuted
+bindings. Extended `execution_costs` rows and `metadata.cost_models` retain full
+numerical cost/provenance audits. Legacy modes receive typed empty target audits;
+legacy static models continue to work. No provider framework, new runtime dependency,
+new signal algorithm or optimizer was introduced. See [contracts](fixed-dollar-rebalancing.md).

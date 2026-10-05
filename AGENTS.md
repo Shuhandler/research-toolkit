@@ -68,6 +68,12 @@
   Borrow fees use prior supplied closing short values and explicit calendar-day rates;
   gross collateral rebate is separate, never a net fee quote. Short dividends accrue
   liabilities and settle once; long DRIP must not auto-cover a now-short payer.
+- Signed scheduled dollar targets are predetermined currency amounts. Convert inside
+  the ledger at execution raw closes; never shrink them to pay costs or normalize by
+  equity. Preserve explicit zero exits, target residual audits and terminal mark-only.
+  Dated square-root cost mappings match exact decision dates and the complete basket
+  universe, including exits/hedges. Bind once per basket, retain model identities and
+  prior-session cutoffs, and keep one continuous accounting state.
 - Keep fixed-rate and historical SOFR financing distinct. SOFR rates require a
   complete supplied publication calendar, point-in-time availability timestamps,
   declared coverage/units and an age limit. Never apply an observation before its

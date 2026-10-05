@@ -1,6 +1,7 @@
 """Shared daily ledger for buy-and-hold and explicitly scheduled target baskets."""
 
 from collections import defaultdict
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, timedelta
@@ -12,7 +13,7 @@ import polars as pl
 
 from ._shorts import LongShortPolicy, StockBorrow, _signed, _signed_targets, _signed_size, _borrow_plan, _cutoff
 from ._costs import TradeCosts
-from ._execution import SquareRootImpactCosts, COST_SCHEMA, _entry_size, _impact_basket
+from ._execution import SquareRootImpactCosts, COST_SCHEMA, _entry_size, _impact_basket, _bind_cost_schedule
 from ._data import _validated_market
 from ._financing import Financing, _below_margin
 from ._sofr import SOFRFinancing, _sofr_plan
@@ -32,6 +33,12 @@ except PackageNotFoundError:
 F, S, D, I = pl.Float64, pl.String, pl.Date, pl.Int64
 UTC = pl.Datetime("us", "UTC")
 SCHEMAS = {
+    "target_executions": {"decision_session": D, "session": D, "asset": S,
+        "target_notional": F, "pre_trade_quantity": F, "pre_trade_notional": F,
+        "reference_price": F, "signed_quantity": F, "quantity": F, "actual_notional": F,
+        "notional_residual": F, "tolerance": F, "trade_id": S, "trade_cost": F},
+    "cost_model_selections": {"decision_session": D, "session": D, "model_id": S,
+        "snapshot_id": S, "sample_start": D, "sample_end": D, "status": S},
     "stock_borrow_accruals": {"date": D, "asset": S, "mark_session": D, "cutoff_at": UTC,
         "available_at": UTC, "short_market_value": F, "annual_rate": F, "day_fraction": F, "amount": F},
     "short_financing_accruals": {"date": D, "opening_collateral": F, "rebate_rate": F,
@@ -39,7 +46,8 @@ SCHEMAS = {
     "dividend_liabilities": {"session": D, "action_id": S, "asset": S, "ex_session": D,
         "pay_date": D, "entitled_quantity": F, "amount": F, "outstanding": F},
     "signal_audit": {**SIGNAL_AUDIT_SCHEMA, "status": pl.String},
-    "execution_costs": {"trade_id": S, "session": D, **COST_SCHEMA},
+    "execution_costs": {"trade_id": S, "session": D, "decision_session": D,
+        "model_id": S, "snapshot_id": S, **COST_SCHEMA},
     "daily": {"session": D, "period_start": D, "opening_equity": F, "equity": F,
               "pnl": F, "simple_return": F, "log_return": F, "cumulative_pnl": F,
               "cumulative_simple_return": F, "compounded_return": F, "cash": F,
@@ -129,14 +137,18 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
-                        policy: RebalancePolicy, costs: TradeCosts | SquareRootImpactCosts, financing: Financing | SOFRFinancing,
+                        policy: RebalancePolicy,
+                        costs: TradeCosts | SquareRootImpactCosts | Mapping[date, SquareRootImpactCosts],
+                        financing: Financing | SOFRFinancing,
                         dividend_reinvestment: DividendReinvestment | None = None,
                         long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None):
     """Execute dated long-only or explicitly signed targets through the shared ledger.
 
-    Signed targets require long_short and stock_borrow and use equity_exposure
-    or quantity columns. Existing long-only target schemas remain unchanged.
-    Target decisions precede execution, every basket includes zero-weight exits,
+    Signed targets require long_short and stock_borrow and use equity_exposure,
+    quantity or target_notional columns. Existing long-only target schemas remain unchanged.
+    Dollar amounts divide by execution raw prices without rescaling for costs.
+    Costs accept one static model or an exact decision-date square-root mapping.
+    Target decisions precede execution, every basket includes explicit zero exits,
     and no trade executes on the terminal session. See docs/api.md for schemas,
     receivable funding rules, turnover denominators, and research margin stops.
     """
@@ -156,7 +168,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
             financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
             dividend_reinvestment=dividend_reinvestment, long_short=long_short, stock_borrow=stock_borrow,
             equity_exposures=first if kind == "equity_exposure" else None,
-            quantities=first if kind == "quantity" else None)
+            quantities=first if kind == "quantity" else None,
+            target_notionals=first if kind == "target_notional" else None)
     if stock_borrow is not None:
         raise ValueError("stock_borrow requires long_short")
     signals = _checked_signals(targets, market, entry_session, end_session) if isinstance(targets, SignalResult) else None
@@ -180,26 +193,28 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
               costs, cash_rate=None, cash_day_count=None, financing=None,
               schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None,
-              equity_exposures=None, quantities=None, long_short=None, stock_borrow=None):
+              equity_exposures=None, quantities=None, long_short=None, stock_borrow=None, target_notionals=None):
     market = _validated_market(market)
     signed = long_short is not None
-    if sum(v is not None for v in (weights, equity_exposures, quantities)) != 1:
-        raise ValueError("supply exactly one of weights, equity_exposures or quantities")
+    if sum(v is not None for v in (weights, equity_exposures, quantities, target_notionals)) != 1:
+        raise ValueError("supply exactly one of weights, equity_exposures, quantities or scheduled target_notionals")
     if signed:
         if not isinstance(long_short, LongShortPolicy) or weights is not None:
-            raise ValueError("LongShortPolicy requires signed equity_exposures or quantities, not long-allocation weights")
+            raise ValueError("LongShortPolicy requires signed position targets, not long-allocation weights")
         long_short.__post_init__()
         if not isinstance(financing, (Financing, SOFRFinancing)) or not isinstance(policy, BuyHoldPolicy) or policy.initial_gross_leverage != 1.:
-            raise ValueError("signed sizing requires financing and policy.initial_gross_leverage=1; exposures/quantities set the size")
+            raise ValueError("signed sizing requires financing and policy.initial_gross_leverage=1; signed targets set the size")
         if financing.maintenance_equity_ratio is not None:
             raise ValueError("signed margin uses LongShortPolicy; set financing.maintenance_equity_ratio=None")
-    elif equity_exposures is not None or quantities is not None or stock_borrow is not None:
+    elif any(v is not None for v in (equity_exposures, quantities, target_notionals, stock_borrow)):
         raise ValueError("signed inputs require LongShortPolicy and StockBorrow")
     if market.metadata["price_basis"] != "raw":
         raise ValueError("buy_and_hold requires raw execution prices")
-    if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, (TradeCosts, SquareRootImpactCosts)):
+    if not isinstance(policy, BuyHoldPolicy) or not isinstance(costs, (TradeCosts, SquareRootImpactCosts, Mapping)):
         raise ValueError("explicit BuyHoldPolicy and supported cost model objects are required")
     policy.__post_init__()
+    if isinstance(costs, Mapping) and schedule is None:
+        raise ValueError("dated cost models require scheduled_rebalance with explicit decision dates")
     if dividend_reinvestment is not None:
         if not isinstance(dividend_reinvestment, DividendReinvestment):
             raise ValueError("dividend_reinvestment must be a DividendReinvestment object or None")
@@ -245,8 +260,13 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         sofr_plan, financing_metadata = _sofr_plan(financing, entry_session, end_session, market.metadata["currency"])
     else:
         financing_metadata = asdict(financing) if financing else None
-    signed_kind = "quantity" if quantities is not None else "equity_exposure"
-    allocation = (_signed(quantities if quantities is not None else equity_exposures,
+    if target_notionals is not None:
+        signed_kind, signed_input = "target_notional", target_notionals
+    elif quantities is not None:
+        signed_kind, signed_input = "quantity", quantities
+    else:
+        signed_kind, signed_input = "equity_exposure", equity_exposures
+    allocation = (_signed(signed_input,
         market.prices["asset"].unique().to_list(), signed_kind) if signed else
         _weights(weights, market.prices["asset"].unique().to_list()))
     borrow_plan, borrow_metadata = {}, None
@@ -260,12 +280,14 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     dates = [d for d in all_sessions if entry_session <= d <= end_session]
     closes = dict(market.sessions.select("session", "close_at").iter_rows())
     prices = {(d, a): p for d, a, p in market.prices.iter_rows()}
-    impact_costs = isinstance(costs, SquareRootImpactCosts)
+    impact_costs = isinstance(costs, (SquareRootImpactCosts, Mapping))
+    bindings, executed_baskets = {}, {entry_session}
     entry_binding = None
     rates = None if impact_costs else costs.resolve(assets)
     if impact_costs:
-        entry_binding = costs._bind(assets, {a: prices[entry_session, a] for a in assets},
-            entry_session, schedule[entry_session][2] if schedule else None, market.metadata["currency"])
+        executions = {day: plan[2] for day, plan in schedule.items()} if schedule else {entry_session: None}
+        bindings = _bind_cost_schedule(costs, executions, assets, prices, closes, market.metadata["currency"])
+        entry_binding = bindings[entry_session]
         gross = 0. if signed else _entry_size(capital, exposure, resolved_weights, entry_binding)
     elif signed:
         gross = 0.
@@ -286,9 +308,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         records["targets"] = target_table.to_dicts()
         # Validate all cost/leverage combinations before processing the first fill.
         for day, (target_weights, target_leverage, decision) in schedule.items():
-            if impact_costs:
-                costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"])
-            elif not signed:
+            if not impact_costs and not signed:
                 _basket({a: 0. for a in assets}, capital, 0., target_weights,
                         target_leverage, rates, rebalance_policy.receivable_policy)
     quantity = {a: 0.0 for a in assets}
@@ -390,7 +410,8 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     def signed_basket(day, values, equity, targets, phase, decision=None):
         nonlocal cash, debt, collateral
         marks = {a: prices[day, a] for a in assets}
-        binding = costs._bind(assets, marks, day, decision, market.metadata["currency"]) if impact_costs else None
+        old_quantities, fills = quantity.copy(), {}
+        binding = bindings[day] if impact_costs else None
         def components(a, n):
             return binding.components(a, n) if binding else {c: abs(n)*rates[c][a] for c in rates}
         def marginal(a, n):
@@ -424,13 +445,14 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             trade_id = f"T{len(records['trades']):06d}"
             parts = components(a, n)
             charge = math.fsum(parts.values())
+            fills[a] = (trade_id, delta, charge)
             cash -= n+charge
             event(day, "trade", phase=phase, asset=a, trade_id=trade_id, dq=delta, dc=-n)
             records["trades"].append(dict(trade_id=trade_id, session=day, time=closes[day], asset=a,
                 signed_quantity=delta, reference_price=marks[a], signed_notional=n,
                 execution="entry_close" if phase == "entry_close" else "scheduled_close", trade_cost=charge))
             if binding:
-                records["execution_costs"].append(dict(binding.row(a, n), trade_id=trade_id, session=day))
+                records["execution_costs"].append(dict(binding.audit_row(a, n), trade_id=trade_id, session=day))
             for component, amount in parts.items():
                 if amount:
                     records["costs"].append(dict(cost_id=f"C{len(records['costs']):06d}", date=day,
@@ -452,6 +474,20 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             -math.fsum(v["outstanding"] for v in liabilities.values()), -debt])
         residual, tolerance = _check(actual_equity, after, max(capital, equity), "signed_basket_cost_equity")
         records["diagnostics"].append(dict(session=day, code="signed_basket_cost_equity", residual=residual, tolerance=tolerance))
+        if signed_kind == "target_notional":
+            actual_gross = math.fsum(abs(quantity[a]*marks[a]) for a in assets)
+            for a in assets:
+                actual = quantity[a]*marks[a]
+                residual, tol = _check(actual, targets[a], max(capital, abs(targets[a])), "fixed_target_notional")
+                trade_id, delta, charge = fills.get(a, (None, 0., 0.))
+                records["target_executions"].append(dict(decision_session=decision, session=day, asset=a,
+                    target_notional=targets[a], pre_trade_quantity=old_quantities[a], pre_trade_notional=values[a],
+                    reference_price=marks[a], signed_quantity=delta, quantity=quantity[a], actual_notional=actual,
+                    notional_residual=residual, tolerance=tol, trade_id=trade_id, trade_cost=charge))
+            residual, tol = _check(actual_gross, math.fsum(abs(v) for v in targets.values()),
+                max(capital, actual_gross), "fixed_target_gross")
+            records["diagnostics"].append(dict(session=day, code="fixed_target_gross", residual=residual, tolerance=tol))
+        executed_baskets.add(day)
         traded = math.fsum(abs(n) for n in changes.values())
         records["turnover"].append(dict(session=day, phase="entry" if phase == "entry_close" else "rebalance",
             gross_traded_notional=traded, equity_before=equity, turnover=traded/equity))
@@ -490,7 +526,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         for asset, notional, mark, qty, components, cost in entry_plan:
             trade_id = f"T{len(records['trades']):06d}"
             if impact_costs:
-                records["execution_costs"].append(dict(entry_binding.row(asset, notional), trade_id=trade_id, session=entry_session))
+                records["execution_costs"].append(dict(entry_binding.audit_row(asset, notional), trade_id=trade_id, session=entry_session))
             quantity[asset] = qty
             event(entry_session, "trade", phase="entry_close", asset=asset,
                   trade_id=trade_id, dq=qty, dc=-notional)
@@ -537,10 +573,11 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     def rebalance(day, values, outstanding, equity):
         nonlocal cash, debt
         target_weights, target_leverage, decision = schedule[day]
+        executed_baskets.add(day)
         if signed:
             signed_basket(day, values, equity, target_weights, "rebalance_close", decision)
             return
-        binding = costs._bind(assets, {a: prices[day, a] for a in assets}, day, decision, market.metadata["currency"]) if impact_costs else None
+        binding = bindings[day] if impact_costs else None
         if impact_costs:
             changes, cost = _impact_basket(values, equity, outstanding, target_weights,
                 target_leverage, binding, rebalance_policy.receivable_policy)
@@ -581,7 +618,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             trade_cost = math.fsum(component_costs.values())
             trade_id = f"T{len(records['trades']):06d}"
             if impact_costs:
-                records["execution_costs"].append(dict(binding.row(asset, notional), trade_id=trade_id, session=day))
+                records["execution_costs"].append(dict(binding.audit_row(asset, notional), trade_id=trade_id, session=day))
             quantity[asset] = next_quantity
             cash -= notional+trade_cost
             event(day, "trade", phase="rebalance_close", asset=asset, trade_id=trade_id,
@@ -940,6 +977,21 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
             rebate_basis="opening_restricted_collateral_gross_before_separate_borrow_fees",
             reinvestment_if_payer_short="release_cash_no_cover",
             short_dividend_policy="ex_date_liability_pay_date_settlement_no_reinvestment")
+    if impact_costs:
+        metadata["cost_model_selection"] = "exact_decision_date" if isinstance(costs, Mapping) else "static"
+        metadata["cost_models"] = [deepcopy(binding.metadata) for binding in bindings.values()]
+        for day, binding in bindings.items():
+            meta = binding.metadata
+            liq = meta["liquidity"]
+            records["cost_model_selections"].append(dict(session=day,
+                decision_session=date.fromisoformat(meta["decision_session"]) if meta["decision_session"] else None,
+                model_id=meta["model_id"], snapshot_id=meta["snapshot_id"],
+                sample_start=date.fromisoformat(liq["sample_start"]) if liq.get("sample_start") else None,
+                sample_end=date.fromisoformat(liq["sample_end"]),
+                status="executed" if day in executed_baskets else "not_executed"))
+    if signed_kind == "target_notional":
+        metadata["target_notional_units"] = market.metadata["currency"]
+        metadata["target_notional_sizing"] = "predetermined_currency_amount_divided_by_execution_raw_close_no_scaling"
     return BacktestResult(**{name: (target_table.clone() if name == "targets" and signed and target_table is not None
                              else pl.DataFrame(rows, schema=SCHEMAS[name]))
                              for name, rows in records.items()}, metadata=metadata,
