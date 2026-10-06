@@ -189,3 +189,13 @@ snapshot, keeps the original leveraged long quantities, and adds a supplied shor
 position. It prints numerical cost and performance comparisons against a supplied
 zero-return benchmark. No downloads, CSVs or figures are generated.
 See [the notebook migration guide](../docs/long-short.md).
+
+## Report diagnostics, factor regression and signal evaluation
+
+`python examples/diagnostics.py` builds a seeded synthetic daily P&L series, factor
+returns and weekly cross-sectional scores, then prints calendar-time and
+trading-period CAGR, Calmar and higher moments; a joint excess-return regression on a
+total-return market factor and a long/short factor beside a market-only fit; and
+per-date rank ICs with equal-weight extreme-quintile returns. Import `run_example()`
+in a notebook to inspect the result objects. No downloads, files or plots; the
+numbers illustrate the interfaces only. See [the API](../docs/api.md#performance-diagnostics-factor-regression-and-signal-evaluation).

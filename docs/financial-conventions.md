@@ -4,8 +4,9 @@ Milestones 1A–1D and 2 implement the input/return conventions, account funding
 entry costs, splits, dividends, cash/borrowing interest, debt repayment, and margin
 stops, performance ratios, benchmark comparisons, scheduled targets, allocation
 and risk estimates below. Capped allocation, nonlinear square-root costs and
-dated risk-free reporting are also implemented. CAGR, drawdown durations and
-advanced allocation remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
+dated risk-free reporting are also implemented, as are CAGR/Calmar/higher-moment
+diagnostics, factor regressions and cross-sectional signal diagnostics. Drawdown
+durations and advanced allocation remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
 
@@ -244,9 +245,9 @@ return intervals are rejected by regular-frequency metrics until explicitly mode
 
 Use daily **net simple portfolio returns** for ordinary risk metrics. Sample
 standard deviations/covariances use `ddof=1`. Volatility is `std(r)*sqrt(A)`;
-arithmetic annualized mean is `mean(r)*A` and is not CAGR. CAGR, if requested, is
-`(E_T/C)^(365.25/elapsed_calendar_days)-1` for positive wealth and elapsed time,
-with that year-length convention recorded. Square-root scaling assumes a regular
+arithmetic annualized mean is `mean(r)*A` and is not CAGR. CAGR is implemented in
+`performance_diagnostics` with an explicitly chosen convention; see
+[diagnostics conventions](#performance-diagnostics-factor-regression-and-signal-evaluation). Square-root scaling assumes a regular
 sampling convention and is not a serial-correlation adjustment.
 
 Risk-free input is an explicit effective annual scalar or an aligned per-period
@@ -679,3 +680,41 @@ schedules; signal-instruction helpers still require next-session-close execution
 - `download_yahoo` keeps Yahoo Close (split-adjusted), Adj Close (split and
   distribution adjusted) and reported volume separate, uses inclusive
   exchange-local session dates, and never forward-fills or drops requested assets.
+
+
+## Performance diagnostics, factor regression and signal evaluation
+
+- CAGR uses the ending wealth multiple `W = E_T/C` from the report's compounded
+  equity, where `C` is initial capital. Calendar time: `W^(D/days) - 1`, with
+  `days` from the first `period_start` (when initial capital is invested) to the last
+  `session`, and an explicit calendar-year length `D` (for example 365 or 365.25).
+  Trading periods: `W^(A/n) - 1` for `n` holding intervals and explicit `A`. It is
+  never the arithmetic annualized mean. `W <= 0` makes CAGR (and Calmar) undefined.
+- Calmar is `CAGR/|max drawdown|` using the report's drawdown table, whose first
+  observation is initial capital; a zero drawdown leaves it undefined.
+- Skewness is the adjusted Fisher-Pearson `G1 = sqrt(n(n-1))/(n-2) * m3/m2^1.5`
+  (n >= 3); excess kurtosis is `G2 = (n-1)/((n-2)(n-3)) * ((n+1)(m4/m2^2-3)+6)`
+  (n >= 4), zero for a normal distribution. Both use periodic simple net returns and
+  population central moments `m_k`. Constant returns are `zero_variance`.
+- Short samples are computed and labeled with interval count and elapsed time; no
+  minimum history is imposed and no statistical reliability is implied.
+- Factor regressions are descriptive OLS fits with an intercept on exactly aligned
+  holding intervals. Total-return series subtract a matched risk-free return only
+  under the explicit `excess_returns` model; excess-return and long/short factors are
+  never adjusted. Joint coefficients are conditional on the other factors and are
+  reported separately from standalone single-factor betas and correlations.
+- Annualized idiosyncratic volatility is `sqrt(A*SSE/(n-k-1))` for k factors and an
+  intercept: the degrees-of-freedom-adjusted residual standard error, not the
+  `ddof=1` standard deviation of fitted residuals (which divides by n-1).
+- Rank-deficient designs (collinear or constant factors) return null coefficients;
+  no pseudoinverse picks one of infinitely many solutions.
+- Signal evaluation matches signals and supplied forward returns by signal date and
+  asset. A forward interval may start at the signal session's close only under the
+  declared same-close assumption; it must otherwise start later and always end after
+  it starts. A later start excludes the intervening return by construction.
+- Rank IC is a per-date Spearman correlation with average ranks for ties. Summaries
+  average per-date values over evaluated dates; asset-date pairs are never pooled or
+  counted as independent time observations. Overlapping horizons are flagged.
+- Quantile returns are equal-weight means of supplied simple forward returns. Group
+  ties are broken by asset identifier or the date is rejected, separately from the
+  average-rank IC rule. Spreads are analytical, not executable portfolio returns.

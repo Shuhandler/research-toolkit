@@ -74,6 +74,8 @@ long/short basket with a hedge and updated liquidity estimates.
 | `rt.performance(...)` | Reports P&L, returns, drawdowns, risk, and benchmark comparisons, including tracking error and information ratio. |
 | `rt.series_performance(...)` | Builds the same report from a daily net dollar P&L series and a starting capital, without a backtest. |
 | `rt.tail_risk(...)` | Calculates historical VaR and expected tail loss for returns and dollar P&L from a report. |
+| `rt.performance_diagnostics(...)` | Adds CAGR (calendar-time or trading-period), Calmar ratio, skewness and excess kurtosis to a report. |
+| `rt.factor_regression(...)` | Regresses portfolio returns on named factor returns, with joint and standalone betas, R², and idiosyncratic volatility. |
 | `rt.correlation(...)` | Calculates correlations between asset returns. |
 | `rt.rolling_risk(...)` | Calculates rolling volatility and Sharpe ratios, plus beta and correlation when a benchmark is supplied. |
 | `rt.risk_free_returns(...)` | Converts dated annual rate observations into holding-period risk-free returns using explicit day-count and compounding rules. |
@@ -83,6 +85,8 @@ Reporting accepts either a constant risk-free rate or dated risk-free returns.
 The risk-free benchmark is separate from borrowing costs and cash interest.
 Summed simple returns, compounded returns, and wealth multiples are kept distinct.
 Stopped runs require explicit partial reporting and retain their stop status.
+Factor regressions and signal diagnostics are descriptive: they match intervals
+exactly, report undefined cases with a status, and make no predictive claims.
 
 ### Research workflows
 
@@ -94,6 +98,7 @@ Stopped runs require explicit partial reporting and retain their stop status.
 | `rt.ResearchStudy(...)` | Creates a study that records candidate selection and final-test use. |
 | `study.select(...)` | Selects among supplied candidate predictions using validation loss. |
 | `study.evaluate_test(...)` | Evaluates the selected candidate on the final test sample. |
+| `rt.signal_diagnostics(...)` | Measures daily rank information coefficients and quantile return spreads of dated asset signals against supplied forward returns. |
 
 These tools do not train models. `study.audit` records evaluations; repeated test
 use must be marked exploratory. Carry the audit into later sessions—the toolkit

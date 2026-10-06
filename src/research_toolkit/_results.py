@@ -235,3 +235,41 @@ class SignalResult:
     sessions: pl.DataFrame
     metadata: dict[str, Any]
     snapshot_id: str
+
+
+@dataclass(frozen=True)
+class PerformanceDiagnostics:
+    """CAGR, Calmar and higher moments of an existing report, with explicit conventions."""
+    values: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FactorRegressionResult:
+    """Descriptive OLS fit of portfolio returns on supplied factor returns.
+
+    ``coefficients`` are jointly estimated; ``standalone`` holds separate
+    single-factor fits. Neither is a predictive or causal estimate.
+    """
+    coefficients: pl.DataFrame
+    standalone: pl.DataFrame
+    summary: pl.DataFrame
+    correlations: pl.DataFrame
+    fitted: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SignalDiagnosticsResult:
+    """Per-date rank ICs and equal-weight quantile returns of dated asset signals.
+
+    Quantile spreads are analytical return differences, not executable portfolios.
+    """
+    ic: pl.DataFrame
+    quantiles: pl.DataFrame
+    spreads: pl.DataFrame
+    summary: pl.DataFrame
+    quantile_summary: pl.DataFrame
+    coverage: pl.DataFrame
+    exclusions: pl.DataFrame
+    metadata: dict[str, Any]

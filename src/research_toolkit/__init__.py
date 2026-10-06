@@ -5,6 +5,7 @@ from ._shorts import LongShortPolicy, StockBorrow
 from ._research import lagged_features, chronological_split, standardize
 from ._research_eval import ResearchStudy
 from ._signals import signal_targets
+from ._results import PerformanceDiagnostics, FactorRegressionResult, SignalDiagnosticsResult
 from ._results import FeatureResult, ResearchSplit, ResearchSelection, ResearchEvaluation, SignalResult
 from ._backtest import buy_and_hold, scheduled_rebalance
 from ._rebalancing import RebalancePolicy
@@ -20,6 +21,9 @@ from ._portfolio import BuyHoldPolicy, equal_weights
 from ._results import BacktestResult, MarketData, ReturnResult, PerformanceResult, CorrelationResult
 from ._metrics import performance, correlation, tail_risk
 from ._series import series_performance
+from ._diagnostics import performance_diagnostics
+from ._factors import factor_regression
+from ._signal_diagnostics import signal_diagnostics
 from ._calendars import trading_calendar
 from ._risk_free import risk_free_returns
 from ._comparison import compare_performance
@@ -35,7 +39,9 @@ __all__ = [
     "SquareRootImpactCosts", "estimate_liquidity", "estimate_trade_costs", "size_entry_orders",
     "risk_free_returns", "compare_performance", "RiskFreeResult", "ComparisonResult",
     "LiquidityResult", "ExecutionResult", "ProviderDataResult", "ProviderDownloadResult",
-    "series_performance", "tail_risk", "trading_calendar", "TradingCalendar",
+    "series_performance", "tail_risk",
+    "performance_diagnostics", "factor_regression", "signal_diagnostics",
+    "PerformanceDiagnostics", "FactorRegressionResult", "SignalDiagnosticsResult", "trading_calendar", "TradingCalendar",
     "SOFRFinancing",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",

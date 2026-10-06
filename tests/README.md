@@ -30,6 +30,17 @@ schemas, provenance, sessions, and portfolio policies.
   with no bars, returned session tables, calendar argument errors, and a download
   converted by `yahoo_chart` into raw prices and run through `buy_and_hold`.
   Skipped unless the `calendar` extra is installed.
+- `test_performance_diagnostics.py`: calendar-time and trading-period CAGR,
+  initial-capital drawdown and Calmar, negative CAGR, zero drawdown, G1/G2 hand
+  values and a pandas reference, degenerate samples and nonpositive wealth.
+- `test_factor_regression.py`: known coefficients, joint versus standalone betas,
+  residual degrees of freedom and idiosyncratic volatility, perfect fits, singular
+  and constant designs, strict alignment, excess-return conversion rules and a
+  numpy least-squares reference.
+- `test_signal_diagnostics.py`: positive/negative rank IC, average-rank ties,
+  per-date (not pooled) means, constant/insufficient cross-sections, uneven and
+  extreme groups, group tie rules, changing universes and exclusions, forward
+  timing and overlapping horizons.
 - `test_public_api.py`: every `rt.*` call named in the README and API docs exists
   and is exported; `__version__`, `__all__`, and plot views without other tests
   (risk contributions, histogram counts, split markers, ledger-only errors, guards).

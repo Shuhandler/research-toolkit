@@ -20,6 +20,10 @@ supports daily long-only signal targets and chronological research; see
 [the complete research API](chronological-research.md). Future
 extensions in [architecture](architecture.md) are labeled separately.
 
+Report diagnostics (`performance_diagnostics`), factor regressions
+(`factor_regression`) and cross-sectional signal evaluation (`signal_diagnostics`)
+are documented [below](#performance-diagnostics-factor-regression-and-signal-evaluation).
+
 Signed positions are supported through `buy_and_hold` and `scheduled_rebalance`
 with `LongShortPolicy` and `StockBorrow`. See [long/short contracts and notebook
 migration](long-short.md) for signed schemas, collateral, borrow fees, dividends,
@@ -400,7 +404,9 @@ volatility with explicit `sharpe_denominator="excess_returns"`. Dated RF inputs
 are supported as an exclusive alternative to the annual scalar; see
 [dated RF contracts](notebook-extensions.md#dated-risk-free-performance-benchmark). Sortino uses the root-mean-square negative MAR shortfall over **all**
 observations, not only losing observations. Ratios use square-root annualization.
-This is a sampling assumption, not a correction for serial correlation. CAGR and
+This is a sampling assumption, not a correction for serial correlation. CAGR,
+Calmar, skewness and kurtosis come from
+[`performance_diagnostics`](#performance-diagnostics-factor-regression-and-signal-evaluation);
 drawdown durations are not implemented.
 
 Benchmark metrics also include `information_ratio` and `annualized_tracking_error`
@@ -1205,3 +1211,174 @@ unscheduled closure added after that release (for example a national day of
 mourning) appears as a missing session until it is excluded or the library is
 upgraded, and future dates can change after publication. Yahoo's `firstTradeDate`
 is provider data, not an exchange record. Delistings are known only when supplied.
+
+## Performance diagnostics, factor regression and signal evaluation
+
+These functions consume prepared reports or supplied return tables. They make no
+network calls, write no files, rerun no backtest and produce no commentary. Each
+returns numerical tables with units and statuses: undefined statistics are null
+with a status, and malformed inputs raise. A runnable synthetic walk-through is
+[`examples/diagnostics.py`](../examples/diagnostics.py).
+
+### `performance_diagnostics`
+
+```python
+diag = rt.performance_diagnostics(report, annualization="calendar_time", days_per_year=365.25)
+diag = rt.performance_diagnostics(report, annualization="trading_periods", periods_per_year=252)
+diag.values  # metric, value, unit, n_obs, status
+```
+
+`report` is any `PerformanceResult` (`performance()` or `series_performance()`).
+`annualization` is required: `calendar_time` needs `days_per_year`;
+`trading_periods` needs `periods_per_year`; the other input must be omitted. Both
+must be positive and finite. A stopped run needs `allow_partial=True`, and its
+actual coverage is used.
+
+| Metric | Unit | Definition |
+| --- | --- | --- |
+| `holding_intervals` | intervals | `n`, rows of `report.daily` |
+| `elapsed_calendar_days` | calendar_days | last `session` minus first `period_start` (initial-capital date) |
+| `elapsed_years` | years | `days/days_per_year` or `n/periods_per_year` |
+| `ending_wealth_multiple` | multiple | `W = ending equity / initial capital` |
+| `compounded_return` | fraction | `W - 1` |
+| `cagr` | fraction/year | `W^(1/elapsed_years) - 1` |
+| `max_drawdown` | fraction | minimum of `report.drawdowns`, which starts at initial capital |
+| `calmar` | ratio | `cagr / abs(max_drawdown)` |
+| `skewness` | dimensionless | adjusted Fisher-Pearson `G1` of periodic simple returns |
+| `excess_kurtosis` | dimensionless | bias-corrected `G2`; a normal distribution gives 0 |
+
+`n_obs` is always the number of holding intervals. Statuses: `nonpositive_ending_wealth`
+(CAGR and Calmar, when `W <= 0` in a retained stopped run), `not_representable`
+(overflowing CAGR), `zero_drawdown` (Calmar), `insufficient_samples` (skewness below
+3 or kurtosis below 4 intervals), `zero_variance` (constant returns), and
+`empty_sample` for a hand-built report without intervals. The report's daily
+returns, equity, compounded return, initial capital, drawdowns and summary
+`max_drawdown` must reconcile, and intervals must be contiguous. Metadata records
+the convention and its input, the report's own `periods_per_year`, run status,
+start/end, elapsed time, CAGR exponent and every formula. Net P&L divided by initial
+capital is already the report's `compounded_return`; no separate
+return-on-capital calculation is added.
+
+### `factor_regression`
+
+```python
+factors = pl.DataFrame({"period_start": ..., "session": ..., "MKT": ..., "SMB": ...})  # Date, Date, Float64...
+fit = rt.factor_regression(
+    report, factors,
+    factor_bases={"MKT": "total_return", "SMB": "long_short"},
+    factor_metadata={"source": "factor file v2", "currency": "USD", "frequency": "1d"},
+    periods_per_year=252,
+    model="excess_returns",          # or "raw_returns"
+    risk_free="report",              # the report's own resolved RF returns
+)
+fit.coefficients  # term, estimate, unit, estimation='joint_ols', status
+fit.standalone    # factor, estimation='single_factor_ols', beta, intercept, correlation, r_squared, ...
+fit.summary       # n_obs, n_factors, rank, residual_df, r_squared, sse, annualized_idiosyncratic_volatility
+fit.correlations  # series, other_series, correlation, n_obs, status (dependent and every factor)
+fit.fitted        # period_start, session, dependent, fitted, residual
+```
+
+The dependent series is a `PerformanceResult` (net equity total returns; stopped
+runs need `allow_partial=True`) or a `period_start, session, simple_return` table
+with `portfolio_basis` (`total_return` or `excess_return`) and `portfolio_metadata`
+(`source`, `currency`, `frequency`). Its intervals must be increasing and
+contiguous. `factors` holds the same two interval columns plus one Float64 column
+per named factor; `factor_bases` must declare every factor as `total_return`,
+`excess_return` (already net of a risk-free rate) or `long_short` (a
+zero-investment spread). Factor currency and frequency must match the portfolio.
+
+Rows may arrive in any order but are matched on **both** interval endpoints.
+Missing, extra, duplicate, null or nonfinite rows raise; nothing is dropped or
+forward-filled. Total-return series must exceed −1.
+
+`model="raw_returns"` regresses every series as supplied and rejects `risk_free`.
+`model="excess_returns"` subtracts the matched risk-free return from the portfolio
+(when `total_return`) and from `total_return` factors only; `excess_return` and
+`long_short` factors are never adjusted. It needs `risk_free` exactly when some
+series is converted: `"report"` (the PerformanceResult's `risk_free_returns`), a
+`RiskFreeResult`, or a return table with `risk_free_metadata` as in `performance()`,
+all strictly aligned. `metadata["transformations"]` records `minus_risk_free` or
+`none` for each series.
+
+OLS includes an intercept and uses Householder QR with column pivoting on centered,
+unit-norm factors. The intercept is periodic (`fraction/period`); betas are
+ratios. `r_squared` is `1 − SSE/SST`. `annualized_idiosyncratic_volatility` is
+`sqrt(periods_per_year * SSE / (n − k − 1))`, the degrees-of-freedom-adjusted
+residual standard error with square-root annualization, not the `ddof=1` standard
+deviation of fitted residuals. Standalone rows are separate single-factor fits
+(beta `cov/var`, intercept, Pearson correlation, `r_squared = corr²`, and their own
+idiosyncratic volatility with `n − 2` degrees of freedom); they are not the joint
+coefficients, which are conditional on the other factors. Regress on one factor to
+reproduce a standalone fit exactly.
+
+Statuses (`metadata["status"]` and the affected rows): `insufficient_observations`
+when `n < k + 1`; `rank_deficient` when factors are collinear or constant (rank uses
+tolerance `max(n,k)·ε·|R₁₁|`, recorded with `constant_factors`), in which case
+coefficients, fitted values and residuals are null rather than a pseudoinverse
+solution; `insufficient_residual_degrees_of_freedom` for idiosyncratic volatility
+when `n = k + 1`; `constant_dependent` for R² and correlations when the dependent
+series is constant (coefficients remain identified); `constant_factor` for a
+standalone fit on a constant factor. There are no standard errors, t-statistics or
+predictive/causal interpretations.
+
+### `signal_diagnostics`
+
+```python
+diag = rt.signal_diagnostics(
+    signals,     # signal_date: Date, asset: String, signal: Float64
+    outcomes,    # signal_date, asset, period_start: Date, period_end: Date, forward_return: Float64
+    timing="after_signal_session",       # or "same_session_close_assumed"
+    quantiles=5, grouping="equal_count", # or "extremes"
+    ties="asset_order",                  # or "reject_boundary_ties"
+    metadata={"signal_source": "...", "return_source": "...", "return_basis": "total_return"},
+    exclusions=None,                     # optional signal_date, asset, reason
+    weighting="equal",
+)
+```
+
+Signals and outcomes are joined on `signal_date` and `asset`, never by row
+position; each pair must be unique. Every outcome must satisfy
+`period_end > period_start` and `period_start > signal_date`, or
+`period_start >= signal_date` with `timing="same_session_close_assumed"` (the
+idealized assumption that a close-derived signal earns the next interval from that
+close). An earlier start raises as backward-looking. A later start is allowed and
+the skipped return is simply not in the supplied outcome. All outcomes for one
+signal date must share one interval. `forward_return` is a supplied simple return;
+nothing is shifted, delayed, filled or recomputed from prices.
+
+Universes may change across dates. A signal without an outcome, or an outcome
+without a signal, raises unless `exclusions` lists that `(signal_date, asset)` with
+a reason; listing a matched pair also raises. `exclusions` (output) shows each
+excluded row and side; `coverage` gives per-date `n_signals`, `n_outcomes`,
+`n_matched`, `n_excluded` and `n_unassigned`.
+
+| Table | Contents |
+| --- | --- |
+| `ic` | per date: `period_start`, `period_end`, `n_assets`, `rank_ic`, `status` |
+| `quantiles` | per date and group: `n_assets`, `mean_signal`, `mean_forward_return`, `status` |
+| `spreads` | per date: `n_low`, `n_high`, `high_minus_low` (group Q minus group 1), `status` |
+| `quantile_summary` | per group: time-series mean of per-date means, `n_dates`, `status` |
+| `summary` | `mean_rank_ic`, `rank_ic_std`, `positive_rank_ic_share`, evaluated/unevaluated IC dates; the same for `high_minus_low`; `signal_dates`; min/mean/max assets per date; `asset_date_observations` |
+
+`rank_ic` is the Spearman correlation on one date: Pearson correlation of average
+ranks, so tied values share their mean rank. Summary statistics are equal-weight
+across evaluated dates (`n_obs` counts dates; `rank_ic_std` uses `ddof=1`); asset-date
+pairs are never pooled into one correlation. `asset_date_observations` is shown for
+coverage only and is not a time-series sample size. `metadata["overlapping_forward_intervals"]`
+flags horizons that overlap the next date's interval, making dates serially dependent.
+
+Groups are formed by ascending signal (group 1 lowest). With `ties="asset_order"`,
+equal signals are ordered by asset identifier, so ties may straddle a boundary;
+`"reject_boundary_ties"` instead leaves that date ungrouped with status
+`tie_at_group_boundary`. This is separate from the average-rank IC. `equal_count`
+labels position `i` (0-based) of `n` as `floor(i·Q/n)+1`, so sizes differ by at most
+one. `extremes` puts exactly `floor(n/Q)` assets in groups 1 and Q; the remaining
+middle assets are split equal-count into groups 2…Q−1, or left unassigned when
+`Q = 2`. Group returns are equal-weight arithmetic means; `weighting="equal"` is the
+only option. Spreads are analytical return differences with no execution, costs,
+financing or hedging; they are not backtests.
+
+Statuses: `insufficient_assets` (fewer than two assets), `constant_signal`,
+`constant_outcome` (IC); `insufficient_assets_for_quantiles` (fewer than Q
+assets), `constant_signal`, `tie_at_group_boundary` (groups and spreads);
+`no_evaluated_dates` and `insufficient_dates` (summaries).

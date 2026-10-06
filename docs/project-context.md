@@ -381,3 +381,30 @@ within that request:
 - Ledger-only plots raise `ValueError` for P&L-series reports. `rt.__version__`,
   `__all__` for `plots`/`adapters`, one numeric validator family, one local-midnight
   cutoff helper, and the `_Ledger` class (with bit-identical outputs) were added.
+
+
+## Performance diagnostics, factor regression and signal evaluation — user request
+
+User-requested: general-purpose report diagnostics (CAGR, bias-corrected skewness
+and excess kurtosis, Calmar), descriptive factor regressions with residual risk,
+and cross-sectional signal evaluation; no assignment-specific assumptions, engine
+changes, plots, downloads or commentary. User-specified conventions: explicit
+calendar-time versus trading-period CAGR starting at initial capital; idiosyncratic
+volatility `sqrt(A*SSE/(n-k-1))`; risk-free subtraction never applied to long/short
+factors; no pseudoinverse coefficients; per-date Spearman ICs with average ranks;
+equal-weight quantile returns; optional equal-size extreme groups of `floor(n/Q)`;
+unexplained signal/outcome mismatches rejected by default.
+
+Engineering choices within that request:
+
+- Names `performance_diagnostics`, `factor_regression`, `signal_diagnostics`, with
+  small result dataclasses. Calendar CAGR requires an explicit `days_per_year`;
+  neither convention has a default.
+- Factor bases are declared per factor (`total_return`, `excess_return`,
+  `long_short`); `risk_free="report"` reuses a report's resolved RF returns.
+  Pure-Python pivoted Householder QR keeps Polars the only dependency. No standard
+  errors are reported.
+- Outcomes carry their own `signal_date` key and one forward interval per date.
+  Unmatched rows need an explicit `exclusions` reason. Group ties are broken by
+  asset identifier or the date is rejected. In `extremes` grouping the middle assets
+  form the interior groups (unassigned when Q=2).

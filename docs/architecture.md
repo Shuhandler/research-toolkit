@@ -373,3 +373,13 @@ bindings. Extended `execution_costs` rows and `metadata.cost_models` retain full
 numerical cost/provenance audits. Legacy modes receive typed empty target audits;
 legacy static models continue to work. No provider framework, new runtime dependency,
 new signal algorithm or optimizer was introduced. See [contracts](fixed-dollar-rebalancing.md).
+
+
+## Report diagnostics and signal evaluation — implemented
+
+`_diagnostics.py`, `_factors.py` and `_signal_diagnostics.py` are calculation-only
+modules. `performance_diagnostics` reads a `PerformanceResult`'s daily, drawdown and
+summary tables after reconciling them; `factor_regression` reuses the strict
+interval and risk-free alignment helpers; `signal_diagnostics` reuses the shared
+schema validation. They return `PerformanceDiagnostics`, `FactorRegressionResult`
+and `SignalDiagnosticsResult`, and import no plotting, provider or ML library.
