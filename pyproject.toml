@@ -13,6 +13,7 @@ dependencies = ["polars>=1.30,<2"]
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
 plot = ["matplotlib>=3.9,<4"]
+calendar = ["exchange_calendars>=4.5,<5"]
 notebook = ["matplotlib>=3.9,<4", "nbformat>=5.10,<6", "nbclient>=0.10,<1", "ipykernel>=6.29,<8"]
 
 [tool.pytest.ini_options]

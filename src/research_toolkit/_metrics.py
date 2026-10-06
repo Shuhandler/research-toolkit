@@ -1,6 +1,7 @@
 """Numerical reports with explicit sampling conventions and strict date joins."""
 
 from copy import deepcopy
+from fractions import Fraction
 import math
 from statistics import mean, stdev
 
@@ -133,6 +134,62 @@ def _cumulative_rows(start, dates, returns, series):
     return rows
 
 
+def _benchmark_report(daily, r, rf, a, mar_period, denominator, currency, capital, benchmark, metadata, frequency="1d"):
+    """Strictly aligned benchmark comparison shared by ledger and P&L-series reports."""
+    n, rows = len(r), []
+    empty_series = pl.DataFrame(schema={"session": pl.Date, "equity": pl.Float64})
+    if benchmark is None:
+        if metadata is not None:
+            raise ValueError("benchmark_metadata requires a benchmark")
+        return (pl.DataFrame(schema=METRIC_SCHEMA), pl.DataFrame(schema=METRIC_SCHEMA), [], empty_series, None)
+
+    def add(name, value, unit, status="ok"):
+        if value is not None and not math.isfinite(value):
+            raise ValueError(f"{name} is not representable")
+        rows.append((name, value, unit, n, status))
+
+    b, bm_meta = _aligned_returns(benchmark, daily.select("period_start", "session"), metadata, currency,
+                                  "benchmark", frequency)
+    br = b["simple_return"].to_list()
+    corr, beta, corr_status, beta_status = _pair(r, br)
+    add("return_correlation", corr, "correlation", corr_status)
+    add("beta", beta, "ratio", beta_status)
+    active = [x-y for x, y in zip(r, br)]
+    tracking = stdev(active) if n >= 2 else None
+    add("annualized_tracking_error", tracking*math.sqrt(a) if tracking is not None else None,
+        "fraction/sqrt(year)", "ok" if n >= 2 else "insufficient_samples")
+    add("information_ratio", math.sqrt(a)*mean(active)/tracking if tracking else None, "ratio",
+        "insufficient_samples" if n < 2 else "zero_tracking_error" if not tracking else "ok")
+    wealth = [capital]
+    for value in br:
+        wealth.append(wealth[-1]*(1+value))
+        if not math.isfinite(wealth[-1]) or wealth[-1] <= 0:
+            raise ValueError("benchmark wealth is not representable")
+    peak_b, drawdowns_b = wealth[0], []
+    for value in wealth:
+        peak_b = max(peak_b, value)
+        drawdowns_b.append(value/peak_b-1)
+    benchmark_summary = _summary(br, rf, a, mar_period, denominator, currency,
+        wealth[-1], wealth[-1]-wealth[0], wealth[-1]/wealth[0]-1, min(drawdowns_b))
+    self_corr, self_beta, self_corr_status, self_beta_status = _pair(br, br)
+    benchmark_summary = pl.concat([benchmark_summary, pl.DataFrame([
+        ("return_correlation", self_corr, "correlation", n, self_corr_status),
+        ("beta", self_beta, "ratio", n, self_beta_status),
+        ("annualized_tracking_error", 0. if n >= 2 else None, "fraction/sqrt(year)", n,
+            "ok" if n >= 2 else "insufficient_samples"),
+        ("information_ratio", None, "ratio", n,
+            "zero_tracking_error" if n >= 2 else "insufficient_samples"),
+        ("entry_cost", 0., currency, n, "not_modeled"),
+        ("financing_cost", 0., currency, n, "not_modeled")], schema=METRIC_SCHEMA, orient="row")])
+    cumulative = _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), br, "benchmark")
+    total = wealth[-1]/wealth[0]-1
+    add("benchmark_compounded_return", total, "fraction")
+    add("compounded_return_difference", 100*(daily["compounded_return"][-1]-total), "percentage_points")
+    add("relative_wealth_return", daily["equity"][-1]/wealth[-1]-1, "fraction")
+    series = pl.DataFrame({"session": [daily["period_start"][0]]+daily["session"].to_list(), "equity": wealth})
+    return pl.DataFrame(rows, schema=METRIC_SCHEMA, orient="row"), benchmark_summary, cumulative, series, bm_meta
+
+
 def performance(result, *, periods_per_year, risk_free_annual_effective=None,
                 minimum_acceptable_return_annual_effective, benchmark=None,
                 benchmark_metadata=None, alignment="strict", allow_partial=False,
@@ -161,13 +218,6 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
         raise ValueError("periodic hurdle is not representable") from exc
     r = daily["simple_return"].to_list()
     n = len(r)
-    rows = []
-
-    def add(name, value, unit, status="ok", count=n):
-        if value is not None and not math.isfinite(value):
-            raise ValueError(f"{name} is not representable")
-        rows.append((name, value, unit, count, status))
-
     peak, dd = 0.0, []
     for row in vals.iter_rows(named=True):
         peak = max(peak, row["equity"])
@@ -187,55 +237,11 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
             ("short_dividend_expense", -result.attribution.filter(pl.col("component") == "short_dividend_expense")["pnl"].sum(), currency, n, "ok"),
             ("short_collateral_rebate", result.short_financing_accruals["rebate"].sum(), currency, n, "ok"),
         ], schema=METRIC_SCHEMA, orient="row")])
-    benchmark_summary = pl.DataFrame(schema=METRIC_SCHEMA)
     cumulative_rows = _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), r, "portfolio")
-    rows = []
-    benchmark_series = pl.DataFrame(schema={"session": pl.Date, "equity": pl.Float64})
-    bm_meta = None
-    if benchmark is None:
-        if benchmark_metadata is not None:
-            raise ValueError("benchmark_metadata requires a benchmark")
-    else:
-        b, bm_meta = _aligned_returns(benchmark, daily.select("period_start", "session"),
-            benchmark_metadata, currency, "benchmark")
-        br = b["simple_return"].to_list()
-        corr, beta, corr_status, beta_status = _pair(r, br)
-        add("return_correlation", corr, "correlation", corr_status)
-        add("beta", beta, "ratio", beta_status)
-        active = [x-y for x, y in zip(r, br)]
-        tracking = stdev(active) if n >= 2 else None
-        add("annualized_tracking_error", tracking*math.sqrt(a) if tracking is not None else None,
-            "fraction/sqrt(year)", "ok" if n >= 2 else "insufficient_samples")
-        add("information_ratio", math.sqrt(a)*mean(active)/tracking if tracking else None, "ratio",
-            "insufficient_samples" if n < 2 else "zero_tracking_error" if not tracking else "ok")
-        wealth = [meta["initial_capital"]]
-        for value in br:
-            wealth.append(wealth[-1]*(1+value))
-            if not math.isfinite(wealth[-1]) or wealth[-1] <= 0:
-                raise ValueError("benchmark wealth is not representable")
-        peak_b, drawdowns_b = wealth[0], []
-        for value in wealth:
-            peak_b = max(peak_b, value)
-            drawdowns_b.append(value/peak_b-1)
-        benchmark_summary = _summary(br, rf_table["simple_return"].to_list(), a, mar_period,
-            sharpe_denominator, currency, wealth[-1], wealth[-1]-wealth[0], wealth[-1]/wealth[0]-1, min(drawdowns_b))
-        self_corr, self_beta, self_corr_status, self_beta_status = _pair(br, br)
-        benchmark_summary = pl.concat([benchmark_summary, pl.DataFrame([
-            ("return_correlation", self_corr, "correlation", n, self_corr_status),
-            ("beta", self_beta, "ratio", n, self_beta_status),
-            ("annualized_tracking_error", 0. if n >= 2 else None, "fraction/sqrt(year)", n,
-                "ok" if n >= 2 else "insufficient_samples"),
-            ("information_ratio", None, "ratio", n,
-                "zero_tracking_error" if n >= 2 else "insufficient_samples"),
-            ("entry_cost", 0., currency, n, "not_modeled"),
-            ("financing_cost", 0., currency, n, "not_modeled")], schema=METRIC_SCHEMA, orient="row")])
-        cumulative_rows += _cumulative_rows(daily["period_start"][0], daily["session"].to_list(), br, "benchmark")
-        total = wealth[-1]/wealth[0]-1
-        add("benchmark_compounded_return", total, "fraction")
-        add("compounded_return_difference", 100*(daily["compounded_return"][-1]-total), "percentage_points")
-        add("relative_wealth_return", daily["equity"][-1]/wealth[-1]-1, "fraction")
-        benchmark_series = pl.DataFrame({"session": [daily["period_start"][0]]+daily["session"].to_list(), "equity": wealth})
-    comparison = pl.DataFrame(rows, schema=METRIC_SCHEMA, orient="row")
+    comparison, benchmark_summary, benchmark_rows, benchmark_series, bm_meta = _benchmark_report(
+        daily, r, rf_table["simple_return"].to_list(), a, mar_period, sharpe_denominator, currency,
+        meta["initial_capital"], benchmark, benchmark_metadata)
+    cumulative_rows += benchmark_rows
     # Prepare chart tables once. Position weights include leverage; cash, debt and
     # receivables complete the balance sheet. No hidden normalization in plots.
     allocation = result.positions.select("session", (pl.lit("asset:")+pl.col("asset")).alias("component"), "weight")
@@ -289,3 +295,47 @@ def correlation(result) -> CorrelationResult:
     values = pl.DataFrame(rows, schema={"asset": pl.String, "other_asset": pl.String,
         "correlation": pl.Float64, "n_obs": pl.Int64, "status": pl.String}, orient="row")
     return CorrelationResult(values, deepcopy(result.metadata), result.diagnostics.clone())
+
+
+TAIL_SCHEMA = {"confidence": pl.Float64, "var_return": pl.Float64, "etl_return": pl.Float64,
+               "var_pnl": pl.Float64, "etl_pnl": pl.Float64, "n_obs": pl.Int64, "n_tail": pl.Int64,
+               "n_tail_pnl": pl.Int64, "status": pl.String}
+
+
+def _historical_tail(values, confidence):
+    """Signed threshold at descending one-based rank ceil(c*n), and the mean at or below it."""
+    ordered = sorted(values, reverse=True)
+    rank = math.ceil(Fraction(str(confidence)) * len(ordered))
+    threshold = ordered[rank-1]
+    tail = [v for v in ordered if v <= threshold]
+    return threshold, math.fsum(tail)/len(tail), len(tail)
+
+
+def tail_risk(report, *, confidence) -> pl.DataFrame:
+    """Historical VaR and expected tail loss of a report's daily net returns and dollar P&L.
+
+    Values keep their sign: a negative VaR/ETL is a loss. The return and dollar
+    rules are applied independently, so their tails can contain different
+    intervals when NAV changes; n_tail and n_tail_pnl report each count.
+    """
+    if not isinstance(report, PerformanceResult):
+        raise ValueError("tail_risk consumes a PerformanceResult")
+    levels = [confidence] if isinstance(confidence, (int, float)) else confidence
+    try:
+        levels = list(levels)
+    except TypeError as exc:
+        raise ValueError("confidence must be a number or a sequence of numbers") from exc
+    if not levels or any(isinstance(c, bool) or not isinstance(c, (int, float)) or not 0 < c < 1 for c in levels):
+        raise ValueError("confidence must satisfy 0 < confidence < 1")
+    returns, pnl = report.daily["simple_return"].to_list(), report.daily["pnl"].to_list()
+    if any(v is None or not math.isfinite(v) for v in returns + pnl):
+        raise ValueError("report returns and P&L must be finite")
+    rows = []
+    for c in levels:
+        if not returns:
+            rows.append((float(c), None, None, None, None, 0, 0, 0, "empty_sample"))
+            continue
+        var_r, etl_r, n_r = _historical_tail(returns, c)
+        var_p, etl_p, n_p = _historical_tail(pnl, c)
+        rows.append((float(c), var_r, etl_r, var_p, etl_p, len(returns), n_r, n_p, "ok"))
+    return pl.DataFrame(rows, schema=TAIL_SCHEMA, orient="row")

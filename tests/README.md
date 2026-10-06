@@ -18,6 +18,15 @@ schemas, provenance, sessions, and portfolio policies.
 - `test_metrics.py`: hand-calculated metrics, benchmark alignment, null reasons,
   corporate-action-aware entry drawdown, stopped reports and asset correlations.
 - `test_snapshots.py`: replay, immutable writes, hash/schema/identity corruption.
+- `test_series_performance.py`: NAV accounting, compounding, initial-capital
+  drawdown, strict benchmark alignment, interval/NAV validation, plot and
+  comparison compatibility, VaR ranks, ties and independent dollar tails.
+- `test_yahoo_download.py`: mocked downloads, inclusive exchange-local dates,
+  retries/timeouts, failures, duplicates and reported missing values.
+- `test_calendars.py`: real exchange calendars offline: skipped sessions (even
+  when every asset lacks them), holidays, early closes, DST, before/after close,
+  listing limits, suspensions, multi-exchange and multi-session intervals.
+  Skipped unless the `calendar` extra is installed.
 - `test_plots.py`: lazy optional imports, plotted values/dates, reusable axes,
   stopped labels and rendering; plotting tests skip when the extra is absent.
 - `test_acceptance.py`: saved one-year inputs, five holdings, $100 million,

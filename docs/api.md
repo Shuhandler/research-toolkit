@@ -12,8 +12,9 @@ Result/configuration objects are concrete dataclasses; their tables are Polars
 DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
-Next-open/intraday execution, fixed/minimum ticket fees, provider
-downloads and walk-forward model research remain unimplemented. Milestone 3
+Next-open/intraday execution, fixed/minimum ticket fees and walk-forward model
+research remain unimplemented. The only provider download is the optional
+[`rt.adapters.download_yahoo`](#external-pl-series-tail-risk-and-yahoo-downloads). Milestone 3
 supports daily long-only signal targets and chronological research; see
 [the complete research API](chronological-research.md). Future
 extensions in [architecture](architecture.md) are labeled separately.
@@ -582,7 +583,8 @@ Plain target tables have the exact schema `decision_session: Date`, `session: Da
 `asset: String`, `weight: Float64`, `gross_leverage: Float64`. The first basket
 executes on `entry_session`. Later execution dates lie strictly before `end_session`
 so the terminal session remains mark-only. Every decision/execution date must be
-in the supplied calendar, with `decision_session < session`; missing/non-session
+in the supplied calendar, with `decision_session < session` by default (the explicit same-close
+research policy below permits equality); missing/non-session
 dates raise. The engine does not infer monthly dates, shift holidays, or carry a
 missing target forward into a new trade. The example explicitly materializes the
 first supplied session of each month; other schedules can supply their own dates.
@@ -941,3 +943,222 @@ contain numerical tables, metadata and provenance. Exact schemas, explicit
 policies, timing rules, final-test audit persistence, supported loss functions
 and examples are documented in [the milestone 3 guide](chronological-research.md).
 No model, plotting, provider or new runtime dependency is required.
+
+
+## Same-close research assumption
+
+`RebalancePolicy(decision_timing="same_session_close_assumed", ...)` explicitly
+permits decision and execution on the same supplied session. The default
+`decision_timing="prior_session"` still requires strict precedence. Future
+decisions and terminal-date trades remain invalid. The opt-in is an idealized
+research assumption that close-derived signals can fill at that close, not a
+claim about executable auction information. Holdings first earn the subsequent
+interval; existing positions earn the move ending at a rebalance close.
+Trailing beta/liquidity windows and cost availability checks are unchanged.
+The setting is retained in run metadata and applies to signed and long-only
+schedules; signal-instruction helpers still require next-session-close execution.
+
+
+## External P&L series, tail risk and Yahoo downloads
+
+### `series_performance`
+
+```python
+daily_pnl = pl.DataFrame({"period_start": [...], "session": [...], "pnl": [...]})  # Date, Date, Float64
+report = rt.series_performance(
+    daily_pnl,
+    initial_capital=1_000_000.0,
+    periods_per_year=252,
+    risk_free_annual_effective=0.03,
+    benchmark=benchmark_returns, benchmark_metadata=benchmark_meta,  # Optional, as in performance()
+    metadata={"source": "strategy P&L export v3", "currency": "USD"},
+    minimum_acceptable_return_annual_effective=0.0,  # Optional; Sortino is null without it.
+)
+```
+
+Reports a supplied daily **net dollar P&L** series that has no `BacktestResult`
+ledger. `daily` needs `period_start: Date`, `session: Date`, `pnl: Float64`; other
+columns are ignored. NAV is `initial_capital + cumulative P&L`, assuming no external
+flows, and each simple return is `pnl_t / NAV_{t-1}`. Rows must already be in
+increasing session order, each interval must satisfy `period_start < session`, and
+each `period_start` must equal the previous `session`. A Friday-to-Monday or
+holiday-spanning interval is valid; without a trading calendar the function checks
+continuity and cannot detect a skipped trading session. Pass `calendar=` to detect
+them; see [calendar-aware validation](#calendar-aware-session-validation). Duplicate, null or nonfinite
+values, an empty table, and NAV that reaches zero or below raise.
+
+`initial_capital` and `periods_per_year` must be positive and finite; the risk-free
+and optional MAR rates follow the `performance()` effective-annual conversion. Only
+the scalar risk-free rate is accepted. `metadata` must be finite JSON with a nonblank
+`currency`; `frequency`, when given, must be `1d`, and report fields such as `status`
+or `initial_capital` are rejected. It is kept as `metadata["source_metadata"]`.
+Benchmarks use the same strict alignment, metadata and calculations as
+`performance()`; mismatched intervals raise rather than being dropped.
+
+The result is an ordinary `PerformanceResult` with the same summary metric
+definitions, minus the ledger-only rows (`entry_cost`, `financing_cost`,
+`ending_leverage`). `equity` and `drawdowns` start with an `initial_capital` phase
+row at the first `period_start`, so a first-interval loss is a drawdown.
+`allocation` and `attribution` are typed empty tables. `return_basis` is
+`net_equity`, so `compare_performance()` can compare it with ledger reports. The
+`pnl`, `returns`, `equity`, `drawdown`, `distribution` and `cumulative_returns` plots
+accept it unchanged; `allocation`, `attribution` and `exposures` need ledger data.
+
+### `tail_risk`
+
+```python
+rt.tail_risk(report, confidence=0.95)          # one row
+rt.tail_risk(report, confidence=[0.95, 0.99])  # one row per level
+```
+
+Historical VaR and expected tail loss (ETL) from any `PerformanceResult`.
+Columns: `confidence`, `var_return`, `etl_return`, `var_pnl`, `etl_pnl`, `n_obs`,
+`n_tail`, `n_tail_pnl`, `status`. Each confidence must satisfy `0 < c < 1`.
+
+Values are sorted from highest to lowest; VaR is the value at one-based rank
+`ceil(c*n)`, where `c` is read as its decimal literal so `0.7*10` is rank 7. ETL is
+the mean of **every** observation at or below VaR, including all ties, and `n_tail`
+is that count. Signs are preserved: a negative VaR or ETL is a loss. For returns
+`[5, 3, 2, 1, 0, -1, -2, -3, -5.5]`, 75% VaR is −2 and ETL is −3.5.
+
+Dollar figures apply the same rule independently to interval net dollar `pnl`.
+When NAV changes, the worst returns and the worst dollar P&L can be different
+intervals, so `n_tail_pnl` is reported separately and dollar VaR is **not** return
+VaR multiplied by a NAV. An empty report gives null values with `empty_sample`;
+otherwise `status` is `ok` and small samples remain visible through `n_obs`.
+
+### `adapters.download_yahoo`
+
+```python
+download = rt.adapters.download_yahoo(["SPY", "7203.T"], start=date(2024, 1, 2), end=date(2024, 12, 31))
+prices = download.values  # session, asset, close, adj_close, volume
+```
+
+This is the toolkit's only network call, made only when the function runs. It uses
+the standard-library HTTP client against Yahoo's v8 chart endpoint, so it adds no
+dependency, and `import research_toolkit` loads no network client. Each request has
+a `timeout` (default 10 s). HTTP 429/5xx, timeouts and connection errors are retried
+up to `max_attempts` (default 3) with exponential `backoff_seconds` (default 1 s);
+other HTTP errors fail immediately. A failed asset raises; requested assets are never
+silently dropped.
+
+`start` and `end` are `datetime.date` values and **both are inclusive**. Sessions are
+the exchange-local date of each bar in the instrument's reported
+`exchangeTimezoneName`. Yahoo's `period2` is exclusive and its bounds are UTC
+instants, so the adapter requests a window padded by a day on each side and keeps
+local sessions from `start` through `end`.
+
+`ProviderDownloadResult.values` is a long table (`session: Date`, `asset: String`,
+`close`, `adj_close`, `volume: Float64`) sorted by asset and session. `close` is
+Yahoo Close, which Yahoo adjusts for **splits but not dividends**; it is not a raw
+execution price (see the [offline adapter](notebook-extensions.md#offline-saved-yahoo-chart-adapter)).
+`adj_close` is Adj Close (splits and distributions). `volume` is as reported, and its
+split basis is not verified. Columns are never substituted for each other.
+
+Duplicate sessions, malformed or mismatched arrays, wrong frequency, invalid prices,
+provider errors and an asset with no observations in range raise. Null provider
+values remain null and are listed in `diagnostics` (`asset`, `session`, `code`,
+`detail`) as `missing_value`. With no calendar, the adapter can only flag
+`session_not_reported` when another requested asset in the same exchange timezone
+has that session, so a date that every asset lacks goes unnoticed. Pass `calendars=`
+for [calendar-aware validation](#calendar-aware-session-validation). Other codes are `session_open_at_retrieval` (a possibly intraday
+bar) and `mixed_currencies`. Nothing is forward-filled.
+
+`metadata` records the provider, endpoint, request parameters, requested inclusive
+dates, boundary and session conventions, column bases, UTC `retrieved_at`, retry
+settings, and per-asset symbol, currency, exchange, timezone, URL, attempts,
+retrieval time and response SHA-256. Yahoo history can be revised; it is not a
+point-in-time vintage. To build `MarketData`, supply an authoritative calendar and
+actions and use the documented price-basis rules.
+
+## Calendar-aware session validation
+
+Install the optional extra with `pip install -e '.[calendar]'`. It adds the maintained
+[`exchange_calendars`](https://github.com/gerrymanoim/exchange_calendars) library
+(and pandas), loaded only when a calendar is requested; `import research_toolkit`
+still imports neither. Calendars are always explicit exchange identifiers such as
+`XNYS`, `XLON` or `XTKS`, never inferred from tickers. Without a calendar, existing
+behavior is unchanged: only interval order and continuity are checked, so a
+trading session that is missing everywhere cannot be detected.
+
+### Reporting calendars
+
+```python
+nyse = rt.trading_calendar("XNYS", start=date(2024, 1, 1), end=date(2024, 12, 31))
+both = rt.trading_calendar(["XNYS", "XLON"], start=date(2024, 1, 1), end=date(2024, 12, 31),
+                           combine="union")  # or "intersection"; required for several exchanges
+```
+
+`TradingCalendar.sessions` has `session: Date` and `close_at: Datetime(UTC)`, the
+scheduled close including early closes and daylight-saving changes (for a
+combination, the latest member close). Metadata records the calendar name, members,
+combine rule, range, library and library version.
+
+### Daily P&L
+
+```python
+report = rt.series_performance(daily_pnl, initial_capital=1e6, periods_per_year=252,
+    risk_free_annual_effective=0.03, metadata=meta, calendar="XNYS")       # one session per interval
+weekly = rt.series_performance(weekly_pnl, initial_capital=1e6, periods_per_year=52,
+    risk_free_annual_effective=0.03, metadata=meta, calendar="XNYS",
+    frequency="multi_session")                                             # declared multi-session
+```
+
+`calendar` is one identifier or one `TradingCalendar`. A list or mapping of several
+exchanges raises: a multi-exchange portfolio needs an explicit reporting calendar
+from `trading_calendar(..., combine=...)`. Every `period_start` and `session`,
+including the first interval's start, must be a reporting session. With the default
+`frequency="1d"`, each interval must run from the previous session to the next, so
+weekends, holidays and scheduled closures pass while a skipped session raises with
+its dates. Shortened sessions are ordinary sessions. `frequency="multi_session"`
+declares intervals that may span several sessions; their endpoints are still
+checked, and benchmark metadata must use the same `frequency`. Annualization treats
+each interval as one period of `periods_per_year`. Duplicate sessions and
+overlapping intervals raise with the dates involved.
+
+`metadata["calendar_validation"]` records the status (`validated` or
+`not_validated`), calendar, library version, validation range, expected sessions,
+observed endpoints and the minimum/maximum sessions per interval.
+
+### Downloaded prices
+
+```python
+download = rt.adapters.download_yahoo(
+    ["SPY", "VOD.L"], start=date(2024, 1, 2), end=date(2024, 12, 31),
+    calendars={"SPY": "XNYS", "VOD.L": "XLON"},   # every asset, explicitly
+    coverage={"VOD.L": {"start": None, "end": date(2024, 6, 28), "source": "delisting notice"}},
+    exclusions=halts,          # optional: asset, session, reason for suspensions/closures
+    incomplete="raise",        # or "report" to return status="incomplete"
+    as_of=None,                # validation time; defaults to retrieval time
+)
+download.metadata["calendar_validation"]["status"]  # complete, coverage_uncertain or incomplete
+```
+
+Each asset is compared only with its own calendar, so a date every asset lacks is
+still reported. The calendar's timezone must equal Yahoo's reported exchange
+timezone. Within the inclusive `start`/`end` range, a session is expected only when
+its scheduled close (early closes and DST included) is at or before `as_of`, which
+cannot be later than retrieval. Sessions not yet closed are listed as
+`session_not_closed`, not as missing.
+
+Coverage starts at the caller's `coverage` start, otherwise Yahoo's
+`firstTradeDate`. When neither exists, sessions before the first bar are reported
+as `coverage_uncertain` instead of being assumed missing; later gaps still count.
+`exclusions` (`asset`, `session`, `reason`) explain suspensions or closures the
+calendar lacks; excluded dates must be calendar sessions. Problems are
+`missing_session`, `unexpected_session` (a bar on a non-session date),
+`session_open_at_validation` (a bar before its close) and
+`bar_outside_declared_coverage`. With `incomplete="raise"` (default) they raise one
+error listing every asset's dates; with `"report"` they appear in diagnostics and
+the status is `incomplete`. Values are never filled or dropped.
+
+Each `metadata["instruments"][asset]["calendar_validation"]` records the calendar,
+library version, timezone, range, validation time, coverage limits and source,
+expected and observed session counts, not-yet-closed, excluded and uncertain
+sessions, problems and status.
+
+Limitations: calendars contain what the installed library version knows. An
+unscheduled closure added after that release (for example a national day of
+mourning) appears as a missing session until it is excluded or the library is
+upgraded, and future dates can change after publication. Yahoo's `firstTradeDate`
+is provider data, not an exchange record. Delistings are known only when supplied.

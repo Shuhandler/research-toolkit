@@ -70,6 +70,8 @@ def returns(market, *, method: str, basis: str, dividend_policy: str | None = No
                   "source": deepcopy(market.metadata),
                   "dividend_policy": dividend_policy,
                   "sessions": [d.isoformat() for d in market.sessions["session"]],
+                  "source_session_closes": {d.isoformat(): t.isoformat()
+                                            for d, t in market.sessions.iter_rows()},
                   "assets": sorted(previous)},
         diagnostics=pl.DataFrame(diagnostics, schema=DIAGNOSTIC_SCHEMA),
     )

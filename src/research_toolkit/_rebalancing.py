@@ -27,8 +27,11 @@ class RebalancePolicy:
     non_session: str
     receivable_policy: str
     max_asset_weight: float
+    decision_timing: str = "prior_session"
 
     def __post_init__(self):
+        if self.decision_timing not in {"prior_session", "same_session_close_assumed"}:
+            raise ValueError("decision_timing must be prior_session or same_session_close_assumed")
         if self.execution != "scheduled_close" or self.sizing != "post_cost_equity":
             raise ValueError("require scheduled_close execution and post_cost_equity sizing")
         if self.fractional_shares is not True or self.terminal_action != "mark_only":
@@ -65,7 +68,7 @@ def _targets(targets, market, entry, end, policy):
         decision = rows["decision_session"][0]
         if day not in calendar or decision not in calendar or not entry <= day < end:
             raise ValueError("target dates must be supplied sessions; execution is in [entry, end)")
-        if decision >= day:
+        if decision > day or (decision == day and policy.decision_timing == "prior_session"):
             raise ValueError("decision_session must precede execution session")
         if rows["asset"].to_list() != assets:
             raise ValueError("every target must cover the same universe; use explicit zero weights")

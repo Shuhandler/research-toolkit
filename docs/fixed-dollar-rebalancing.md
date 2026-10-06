@@ -21,7 +21,8 @@ any hedge. Amounts are finite and use the market's declared currency. Do not als
 supply `quantity`, `equity_exposure`, `weight`, or `gross_leverage` columns.
 
 The initial basket executes at `entry_session`. Decision and execution dates must
-be supplied sessions and decision must precede execution. The table supports any
+be supplied sessions and decision must precede execution by default; the explicit
+`decision_timing="same_session_close_assumed"` policy permits equality. The table supports any
 later supplied execution session; to execute at the next close, explicitly choose
 the next row of the supplied calendar. No orders execute on `end_session`.
 That final session remains mark-only, including when its price would be useful
@@ -120,7 +121,13 @@ frozen daily volatility or dollar ADV estimates.
 
 For a manually supplied `LiquidityResult`, dated selection additionally requires
 ISO `sample_start`, `sample_end`, `decision_session`, and timezone-aware
-`decision_at` metadata. Sample endpoints must be supplied market sessions, with
+`decision_at` metadata. `returns` now retains `source_session_closes`, which `estimate_liquidity` carries
+into its provenance. This permits estimation history before the execution market
+starts without requiring historical action coverage in the execution ledger.
+The source calendar must match the declared return sessions, contain timezone-aware
+chronological closes, and agree with execution closes wherever they overlap.
+Legacy manually supplied estimates without this metadata use the execution calendar.
+Sample endpoints must belong to that source calendar (or the legacy execution calendar), with
 `sample_start <= sample_end < decision_session`. The declared availability cutoff
 must follow the sample-end close and be no later than the decision close. The
 model's `decision_session` must exactly equal its mapping key. These checks cannot
@@ -185,3 +192,17 @@ normalize by equity. For changing costs, replace the static `costs` argument wit
 the decision mapping. Select columns by name if consuming the expanded audit tables.
 Always preserve stopped-run coverage; call `require_complete()` for a full report
 or explicitly opt into partial reporting.
+
+
+## Same-close research assumption
+
+`RebalancePolicy(decision_timing="same_session_close_assumed", ...)` explicitly
+permits decision and execution on the same supplied session. The default
+`decision_timing="prior_session"` still requires strict precedence. Future
+decisions and terminal-date trades remain invalid. The opt-in is an idealized
+research assumption that close-derived signals can fill at that close, not a
+claim about executable auction information. Holdings first earn the subsequent
+interval; existing positions earn the move ending at a rebalance close.
+Trailing beta/liquidity windows and cost availability checks are unchanged.
+The setting is retained in run metadata and applies to signed and long-only
+schedules; signal-instruction helpers still require next-session-close execution.

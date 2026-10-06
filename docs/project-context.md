@@ -325,3 +325,39 @@ Routine engineering choices made within that request:
 
 No new financial choice needed user clarification. See [API and migration](fixed-dollar-rebalancing.md)
 and [the runnable notebook](../examples/fixed_dollar_rebalancing.ipynb).
+
+
+## Independent liquidity-history calendar — authorized adjustment
+
+The user authorized using estimation history that predates the execution market.
+Return metadata now carries the validated source session closes, propagated through
+liquidity estimation. Dated cost binding validates sample endpoints against that
+calendar and checks overlap with execution closes. Existing availability cutoffs,
+strictly prior samples, exact decision keys and immutable model identities remain.
+Legacy manual estimates without a source calendar retain the original validation.
+Offline tests cover truncated execution history and malformed/late calendars.
+
+
+## Same-session closing execution — user-confirmed change
+
+The user explicitly requested the assignment-style assumption of forming daily
+signals and trading at that same close. Added an opt-in RebalancePolicy setting,
+`decision_timing="same_session_close_assumed"`, while retaining strict prior-session
+decisions by default. No future decisions or preceding-return attribution are
+allowed. This supersedes strict precedence only for explicitly opted-in schedules;
+source estimation/availability cutoffs and all accounting remain unchanged.
+
+
+## P&L series, tail risk, Yahoo downloads and exchange calendars — user requests
+
+User-requested: `series_performance` (NAV = initial capital + cumulative net P&L;
+returns over previous NAV), signed historical `tail_risk` with independent dollar
+tails, and a network `download_yahoo` adapter (standard-library HTTP, bounded
+retries/timeouts, inclusive exchange-local dates). User-confirmed: optional
+calendar validation through the maintained `exchange_calendars` library, declared
+as the `calendar` extra and imported only when a calendar is supplied. Calendars
+are explicit identifiers per asset; multi-exchange P&L needs an explicit
+union/intersection reporting calendar. Engineering choices: missing completed
+sessions raise by default (`incomplete="report"` returns status `incomplete`);
+unknown listing dates make only pre-first-bar gaps `coverage_uncertain`;
+suspensions need caller-supplied exclusions.

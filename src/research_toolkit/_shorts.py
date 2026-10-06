@@ -130,7 +130,7 @@ def _signed(values, assets, column):
     return dict(sorted(out.items()))
 
 
-def _signed_targets(targets, market, entry, end):
+def _signed_targets(targets, market, entry, end, policy):
     from datetime import date
     if type(entry) is not date or type(end) is not date or entry >= end:
         raise ValueError("entry/end must be dates with at least one holding interval")
@@ -153,7 +153,8 @@ def _signed_targets(targets, market, entry, end):
         rows = table.filter(pl.col("session") == day)
         decision = rows["decision_session"][0]
         if (rows["decision_session"].n_unique() != 1 or set(rows["asset"]) != universe
-                or day not in sessions or decision not in sessions or not decision < day
+                or day not in sessions or decision not in sessions or decision > day
+                or (decision == day and policy.decision_timing == "prior_session")
                 or not entry <= day < end):
             raise ValueError("signed baskets require a complete universe, prior decision session, and execution sessions in [entry, end)")
         values = _signed(rows.select("asset", col), universe, col)

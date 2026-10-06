@@ -26,7 +26,9 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_sofr.py` | Historical SOFR/publication contracts, source identity, known-rate selection and loan policy | Post-M2 |
 | `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
 | `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
-| `_metrics.py` | Performance tables, benchmark comparisons, result validation | 1D |
+| `_metrics.py` | Performance tables, benchmark comparisons, result validation, historical VaR/ETL | 1D onward |
+| `_calendars.py` | Optional exchange-calendar sessions/closes and explicit reporting calendars | Post-M3 |
+| `_series.py` | Performance reports from a supplied daily net P&L series and starting capital | Post-M3 |
 | `plots.py` | Public plotting namespace consuming prepared numerical results | 1D onward |
 | `_allocation.py` | Pre-decision inverse-volatility/covariance estimates and realized rolling risk | 2 |
 | `_rebalancing.py` | Explicit dated-target policy, validation and post-cost basket sizing | 2 |

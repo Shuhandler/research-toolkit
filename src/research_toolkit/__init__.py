@@ -17,10 +17,12 @@ from ._sofr import SOFRFinancing
 from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, equal_weights
 from ._results import BacktestResult, MarketData, ReturnResult, PerformanceResult, CorrelationResult
-from ._metrics import performance, correlation
+from ._metrics import performance, correlation, tail_risk
+from ._series import series_performance
+from ._calendars import trading_calendar
 from ._risk_free import risk_free_returns
 from ._comparison import compare_performance
-from ._results import RiskFreeResult, ComparisonResult, LiquidityResult, ExecutionResult, ProviderDataResult
+from ._results import RiskFreeResult, ComparisonResult, LiquidityResult, ExecutionResult, ProviderDataResult, ProviderDownloadResult, TradingCalendar
 from ._snapshots import save_snapshot, load_snapshot
 from . import plots, adapters
 from ._returns import cumulative_returns, returns
@@ -31,7 +33,8 @@ __all__ = [
     "FeatureResult", "ResearchSplit", "ResearchSelection", "ResearchEvaluation", "SignalResult",
     "SquareRootImpactCosts", "estimate_liquidity", "estimate_trade_costs", "size_entry_orders",
     "risk_free_returns", "compare_performance", "RiskFreeResult", "ComparisonResult",
-    "LiquidityResult", "ExecutionResult", "ProviderDataResult",
+    "LiquidityResult", "ExecutionResult", "ProviderDataResult", "ProviderDownloadResult",
+    "series_performance", "tail_risk", "trading_calendar", "TradingCalendar",
     "SOFRFinancing",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",

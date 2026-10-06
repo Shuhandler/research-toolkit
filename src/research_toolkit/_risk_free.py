@@ -25,7 +25,7 @@ def _intervals(table):
     return table
 
 
-def _aligned_returns(table, intervals, metadata, currency, name):
+def _aligned_returns(table, intervals, metadata, currency, name, frequency="1d"):
     values = _table(table, RETURN_SCHEMA, name, ["session"], nonempty=True).sort("session")
     if not values.select("period_start", "session").equals(intervals):
         raise ValueError(f"{name} intervals must match both endpoints exactly (strict alignment)")
@@ -34,7 +34,7 @@ def _aligned_returns(table, intervals, metadata, currency, name):
     if not isinstance(metadata, dict) or any(not isinstance(metadata.get(k), str) or not metadata[k].strip()
         for k in ("source", "basis", "currency", "frequency")):
         raise ValueError(f"{name}_metadata requires source, basis, currency and frequency")
-    if metadata["currency"] != currency or metadata["frequency"] != "1d":
+    if metadata["currency"] != currency or metadata["frequency"] != frequency:
         raise ValueError(f"{name} currency/frequency must match the portfolio")
     try:
         meta = json.loads(json.dumps(metadata, allow_nan=False))
@@ -90,7 +90,7 @@ def risk_free_returns(daily_rates, *, intervals, day_count, compounding, rate_ti
     return RiskFreeResult(table, rates, meta)
 
 
-def _risk_free(daily, currency, annual, supplied, metadata, periods_per_year):
+def _risk_free(daily, currency, annual, supplied, metadata, periods_per_year, frequency="1d"):
     if (annual is None) == (supplied is None):
         raise ValueError("supply exactly one of risk_free_annual_effective or risk_free_returns")
     intervals = daily.select("period_start", "session")
@@ -108,5 +108,5 @@ def _risk_free(daily, currency, annual, supplied, metadata, periods_per_year):
         if metadata is not None:
             raise ValueError("RiskFreeResult already includes risk_free_metadata")
         metadata, supplied = supplied.metadata, supplied.values
-    table, meta = _aligned_returns(supplied, intervals, metadata, currency, "risk_free")
+    table, meta = _aligned_returns(supplied, intervals, metadata, currency, "risk_free", frequency)
     return table, deepcopy(meta), None

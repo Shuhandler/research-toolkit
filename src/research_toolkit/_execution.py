@@ -294,10 +294,27 @@ def _bind_cost_schedule(costs, executions, assets, prices, closes, currency):
                 available = datetime.fromisoformat(meta["decision_at"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("dated liquidity requires ISO sample_start, sample_end and timezone-aware decision_at") from exc
-            if start not in closes or end not in closes or not start <= end < decision:
+            sample_closes = closes
+            if "source_session_closes" in meta:
+                try:
+                    calendar = meta["source_session_closes"]
+                    if not isinstance(calendar, dict) or not calendar:
+                        raise ValueError("empty source calendar")
+                    sample_closes = {date.fromisoformat(d): datetime.fromisoformat(t)
+                                     for d, t in calendar.items()}
+                    ordered = sorted(sample_closes.items())
+                    if (any(t.tzinfo is None or t.utcoffset() is None for _, t in ordered)
+                            or any(a[1] >= b[1] for a, b in zip(ordered, ordered[1:]))
+                            or any(t != closes[d] for d, t in ordered if d in closes)):
+                        raise ValueError("inconsistent source closes")
+                    if set(calendar) != set(meta["sessions"]):
+                        raise ValueError("source calendar does not match return sessions")
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("dated liquidity requires a valid source session calendar consistent with execution closes") from exc
+            if start not in sample_closes or end not in sample_closes or not start <= end < decision:
                 raise ValueError("dated liquidity sample must use supplied sessions strictly before its decision")
             if (available.tzinfo is None or available.utcoffset() is None
-                    or not closes[end] <= available <= closes[decision]):
+                    or not sample_closes[end] <= available <= closes[decision]):
                 raise ValueError("dated liquidity availability must follow its sample and be no later than the decision close")
         bindings[session] = binding
     return bindings

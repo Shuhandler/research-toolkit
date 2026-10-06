@@ -148,7 +148,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     quantity or target_notional columns. Existing long-only target schemas remain unchanged.
     Dollar amounts divide by execution raw prices without rescaling for costs.
     Costs accept one static model or an exact decision-date square-root mapping.
-    Target decisions precede execution, every basket includes explicit zero exits,
+    Target decisions precede execution by default; same-close research execution
+    requires explicit policy opt-in. Every basket includes explicit zero exits,
     and no trade executes on the terminal session. See docs/api.md for schemas,
     receivable funding rules, turnover denominators, and research margin stops.
     """
@@ -159,7 +160,7 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     if long_short is not None:
         if policy.receivable_policy != "require_target":
             raise ValueError("signed targets require receivable_policy='require_target'; declared loans fund unavailable receivables")
-        table, plans, kind = _signed_targets(targets, market, entry_session, end_session)
+        table, plans, kind = _signed_targets(targets, market, entry_session, end_session, policy)
         first, _, _ = plans[entry_session]
         initial_policy = BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
             fractional_shares=True, initial_gross_leverage=1., terminal_action="mark_only")
@@ -951,7 +952,9 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
     if schedule is not None:
         metadata.update(strategy="scheduled_rebalance", rebalance_policy=asdict(rebalance_policy),
             dividend_policy="ex_date_receivable_pay_date_cash_reinvest_only_via_scheduled_trades",
-            decision_timing="decision_session_strictly_before_execution",
+            decision_timing=("decision_session_strictly_before_execution"
+                if rebalance_policy.decision_timing == "prior_session"
+                else "same_session_close_execution_assumed"),
             concentration_denominator="target_risky_asset_proportion",
             target_weight_normalization="divide_by_basket_sum_within_1e-12_roundoff",
             margin_monitoring="before_scheduled_trade_and_after_session_close",

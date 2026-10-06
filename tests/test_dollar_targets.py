@@ -238,3 +238,77 @@ def test_fixed_dollar_notebook_offline(monkeypatch):
         assert r.execution_costs["total_cost"].sum() == pytest.approx(r.trades["trade_cost"].sum())
     finally:
         plt.close("all")
+
+
+def test_liquidity_history_can_precede_execution_calendar(inputs):
+    history = rt.prepare_market_data(**inputs({"A":[10,11,10,12,9,11,10,12,13]}, dates=DATES))
+    execution = rt.prepare_market_data(**inputs({"A":[12,9,11,10,12,13]}, dates=DATES[3:]))
+    returns = rt.returns(history, method="simple", basis="price")
+    volumes = history.sessions.select("session", pl.col("close_at").alias("available_at")).with_columns(
+        pl.lit("A").alias("asset"), pl.lit(10_000.).alias("dollar_volume")).select(
+        "session", "asset", "dollar_volume", "available_at")
+    liquidity = rt.estimate_liquidity(returns, volumes, decision_session=DATES[3], lookback=2,
+        metadata={"source":"synthetic", "currency":"USD"})
+    model = replace(cost_model(DATES[3]), liquidity=liquidity)
+    result = dated_run(execution, {4:{"A":100}}, {DATES[3]:model})
+    result.require_complete()
+    assert result.target_executions["actual_notional"].item() == pytest.approx(100.)
+    assert result.cost_model_selections["sample_end"].item() == DATES[2]
+    for issue in ("missing_endpoint", "naive", "late_sample_close", "overlap", "early_availability"):
+        from copy import deepcopy
+        meta = deepcopy(liquidity.metadata)
+        calendar = meta["source_session_closes"]
+        if issue == "missing_endpoint": calendar.pop(DATES[2].isoformat())
+        elif issue == "naive": calendar[DATES[2].isoformat()] = "2024-01-04T20:00:00"
+        elif issue == "late_sample_close": calendar[DATES[2].isoformat()] = "2024-01-05T06:00:00+00:00"
+        elif issue == "overlap": calendar[DATES[3].isoformat()] = "2024-01-05T19:00:00+00:00"
+        else: meta["decision_at"] = "2024-01-04T00:00:00+00:00"
+        bad = replace(model, liquidity=replace(liquidity, metadata=meta))
+        with pytest.raises(ValueError): dated_run(execution, {4:{"A":100}}, {DATES[3]:bad})
+
+
+@pytest.mark.parametrize("kind", ["target_notional", "quantity", "equity_exposure", "weight"])
+def test_same_close_opt_in_earns_only_subsequent_move(inputs, kind):
+    from test_long_short import loan, ls
+    m = rt.prepare_market_data(**inputs({"A":[10,20,30,40,40,40,40,40,40]}, dates=DATES))
+    values = {"target_notional":[100.,-100.], "quantity":[5.,-100/30],
+              "equity_exposure":[1.,-2/3], "weight":[1.,1.]}[kind]
+    targets = pl.DataFrame({"decision_session":[DATES[1],DATES[2]],
+        "session":[DATES[1],DATES[2]], "asset":["A","A"], kind:values})
+    if kind == "weight": targets = targets.with_columns(pl.lit(1.).alias("gross_leverage"))
+    policy = rt.RebalancePolicy(execution="scheduled_close", sizing="post_cost_equity",
+        fractional_shares=True, terminal_action="mark_only", non_session="raise",
+        receivable_policy="require_target", max_asset_weight=1.)
+    options = dict(targets=targets, initial_capital=100., entry_session=DATES[1],
+        end_session=DATES[-1], policy=policy, costs=ZERO, financing=loan())
+    if kind != "weight": options.update(long_short=ls(),stock_borrow=borrow({"A":0.}))
+    with pytest.raises(ValueError): rt.scheduled_rebalance(m, **options)
+    options["policy"] = replace(policy, decision_timing="same_session_close_assumed")
+    result = rt.scheduled_rebalance(m, **options).require_complete()
+    assert result.trades["signed_quantity"][0] == pytest.approx(5.)
+    assert result.daily["pnl"][0] == pytest.approx(50.)
+    assert result.daily["pnl"][1] == pytest.approx(50. if kind=="weight" else -100/3)
+    assert result.metadata["decision_timing"] == "same_session_close_execution_assumed"
+    # Even opt-in cannot use a future decision or trade on the terminal day.
+    for decision,execution in [(DATES[2],DATES[1]),(DATES[-1],DATES[-1])]:
+        bad = targets.head(1).with_columns(pl.lit(decision).alias("decision_session"),
+            pl.lit(execution).alias("session"))
+        with pytest.raises(ValueError): rt.scheduled_rebalance(m, **(options|dict(targets=bad)))
+
+
+def test_same_close_dated_costs_preserve_prior_liquidity(inputs):
+    m = rt.prepare_market_data(**inputs({"A":[10]*9},dates=DATES))
+    policy = rt.RebalancePolicy(execution="scheduled_close", sizing="post_cost_equity",
+        fractional_shares=True, terminal_action="mark_only", non_session="raise",
+        receivable_policy="require_target", max_asset_weight=1.,
+        decision_timing="same_session_close_assumed")
+    targets = pl.DataFrame({"decision_session":[DATES[2]],"session":[DATES[2]],
+        "asset":["A"],"target_notional":[100.]})
+    model = cost_model(DATES[2])
+    result = run(m,{2:{"A":100}},targets=targets,policy=policy,
+        entry_session=DATES[2],costs={DATES[2]:model}).require_complete()
+    assert result.daily["equity"][-1] == pytest.approx(99.75)
+    assert result.execution_costs["total_cost"].sum() == pytest.approx(.25)
+    assert result.cost_model_selections["decision_session"].item() == DATES[2]
+    with pytest.raises(ValueError):
+        replace(policy, decision_timing="unchecked")

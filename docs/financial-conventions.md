@@ -86,7 +86,8 @@ policy. Static weights must be decided before entry. The first implementation
 supports only `entry_close`: idealized dollar-sized orders at that session's raw
 close, with modeled execution costs. Using that close to convert predetermined
 dollar allocations into fractional shares is a stated fill assumption. Selecting
-weights from that same close is not permitted. There is no claimed guarantee of a
+weights from that same close requires the explicit scheduled
+`same_session_close_assumed` research opt-in described below. There is no claimed guarantee of a
 real closing-auction fill or capacity at the requested size.
 
 Record `initial_capital` as a pre-entry valuation, then post-entry balances and
@@ -642,3 +643,39 @@ rebate remain separate. Automatic long dividend reinvestment is still free.
 Audit identities and source windows are retained alongside actual cost components;
 no model refresh restarts or stitches the ledger. See
 [exact contracts and numerical tolerances](fixed-dollar-rebalancing.md).
+
+
+## Same-close research assumption
+
+`RebalancePolicy(decision_timing="same_session_close_assumed", ...)` explicitly
+permits decision and execution on the same supplied session. The default
+`decision_timing="prior_session"` still requires strict precedence. Future
+decisions and terminal-date trades remain invalid. The opt-in is an idealized
+research assumption that close-derived signals can fill at that close, not a
+claim about executable auction information. Holdings first earn the subsequent
+interval; existing positions earn the move ending at a rebalance close.
+Trailing beta/liquidity windows and cost availability checks are unchanged.
+The setting is retained in run metadata and applies to signed and long-only
+schedules; signal-instruction helpers still require next-session-close execution.
+
+
+## External P&L series and historical tail risk
+
+- `series_performance` sets NAV to initial capital plus cumulative net P&L, with
+  no external flows, and each simple return to interval P&L over the previous NAV.
+  NAV must stay positive. Initial capital is the first drawdown observation.
+  Intervals must be ordered and contiguous; weekends and holidays are not gaps, but
+  without a calendar a skipped trading session cannot be detected.
+- Historical VaR is the signed value at descending rank `ceil(c*n)`; ETL is the
+  mean of every value at or below it, including ties. Negative values are losses
+  and are not converted to positive magnitudes. Dollar VaR/ETL apply the same
+  rule to interval P&L independently; they are not return VaR times a NAV.
+- Calendar validation is opt-in through explicit exchange identifiers. Daily
+  intervals run from one session to the next session of ONE reporting calendar;
+  several exchanges need an explicit union or intersection. Downloaded bars are
+  checked against each asset's own calendar, expecting only sessions whose
+  scheduled close precedes the validation time. Unknown listing dates make leading
+  gaps uncertain rather than missing; suspensions require supplied explanations.
+- `download_yahoo` keeps Yahoo Close (split-adjusted), Adj Close (split and
+  distribution adjusted) and reported volume separate, uses inclusive
+  exchange-local session dates, and never forward-fills or drops requested assets.

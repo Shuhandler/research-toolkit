@@ -28,6 +28,8 @@ complete examples.
 | `rt.save_snapshot(...)` | Saves validated market inputs locally for repeatable research. |
 | `rt.load_snapshot(...)` | Loads a saved snapshot and checks its integrity. |
 | `rt.adapters.yahoo_chart(...)` | Converts supplied Yahoo chart responses into market data and an audit of the conversion. No downloads. |
+| `rt.adapters.download_yahoo(...)` | Downloads daily Yahoo Close, Adj Close, and volume for an inclusive date range, with retries, timeouts, and retrieval details. The only function that uses the network. Optional exchange calendars detect missing sessions. |
+| `rt.trading_calendar(...)` | Builds explicit exchange trading sessions, or a declared union/intersection of exchanges, for calendar validation (optional `calendar` extra). |
 
 The Yahoo adapter requires explicit price-adjustment information, calendars, and
 dividend payment dates where applicable. It does not assume that a provider's
@@ -69,6 +71,8 @@ long/short basket with a hedge and updated liquidity estimates.
 | Function | What it does |
 | --- | --- |
 | `rt.performance(...)` | Reports P&L, returns, drawdowns, risk, and benchmark comparisons, including tracking error and information ratio. |
+| `rt.series_performance(...)` | Builds the same report from a daily net dollar P&L series and a starting capital, without a backtest. |
+| `rt.tail_risk(...)` | Calculates historical VaR and expected tail loss for returns and dollar P&L from a report. |
 | `rt.correlation(...)` | Calculates correlations between asset returns. |
 | `rt.rolling_risk(...)` | Calculates rolling volatility and Sharpe ratios, plus beta and correlation when a benchmark is supplied. |
 | `rt.risk_free_returns(...)` | Converts dated annual rate observations into holding-period risk-free returns using explicit day-count and compounding rules. |

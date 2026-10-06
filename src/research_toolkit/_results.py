@@ -166,6 +166,21 @@ class ProviderDataResult:
 
 
 @dataclass(frozen=True)
+class TradingCalendar:
+    """Explicit exchange sessions (UTC closes) used to validate observed dates."""
+    sessions: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProviderDownloadResult:
+    """Long provider observations as reported, with retrieval/request provenance."""
+    values: pl.DataFrame
+    diagnostics: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class FeatureResult:
     """Lagged daily features, availability lineage and explicit unusable rows."""
     values: pl.DataFrame
