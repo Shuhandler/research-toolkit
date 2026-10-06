@@ -5,8 +5,8 @@ percentages or tests that mirror implementation. Milestone 1A–1D and 2 tests n
 data validation, return arithmetic, entry costs, actions, cash interest, drift,
 scaling, leverage, financing, debt repayment, stopped runs, and accounting identities
 using synthetic Polars tables and independent expected values. Performance,
-benchmark, snapshot and plotting checks are implemented; chronological research
-checks remain targets for later phases. Run `python -m pytest -q`; network connections are
+benchmark, snapshot, plotting, chronological research and signal checks are
+implemented (see the sections below). Run `python -m pytest -q`; network connections are
 blocked by the unit-test fixture.
 
 ## Hand-checkable oracles
@@ -296,3 +296,19 @@ dated results for shares, equity exposures and dollars, and exercise legacy long
 weights with dated models. It executes every code cell of the new synthetic
 notebook offline, checking its gross targets and cost reconciliation. The notebook
 is also validated in a real Jupyter kernel for inline numerical output and figures.
+
+## Audit follow-up checks
+
+The ledger was reorganized from one 809-line function into the `_Ledger` class
+(setup, entry, per-date phases, close and result methods). Before the change, exact
+SHA-256 digests of every table and the metadata of all 401 ledger runs made by the
+test suite, the example scripts, the four notebooks and independent verification
+scripts were recorded, including the text of every expected error. After the change
+all 401 digests were identical.
+
+New tests cover the documented API surface (`test_public_api.py`), argument and
+solver guards (`test_validation_guards.py`), download-to-ledger integration and
+calendar session tables (`test_calendars.py`), and request order, retained payloads,
+HTTP error cleanup and intraday-bar flags for downloads (`test_yahoo_download.py`).
+Roundoff-normalisation branches in the ledger (cash a few ulps below zero after a
+basket) remain without a direct test because no small input reliably produces them.

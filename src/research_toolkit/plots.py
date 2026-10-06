@@ -4,11 +4,15 @@ Every function returns (Figure, Axes), accepts an existing ax, and never calls
 show() or changes global styles. Matplotlib is imported only on a plotting call.
 """
 
-from textwrap import fill
+from textwrap import fill as _fill
 
 import polars as pl
 
 from ._results import PerformanceResult
+
+__all__ = ["prices", "pnl", "returns", "cumulative_returns", "equity", "drawdown", "distribution",
+           "allocation", "attribution", "correlation", "rolling_risk", "risk_contributions",
+           "turnover", "exposures"]
 
 
 def _axes(ax):
@@ -21,7 +25,7 @@ def _axes(ax):
 
 def _finish(ax, title, ylabel, *, percent=False, dates=True):
     from matplotlib.ticker import PercentFormatter
-    ax.set(title=fill(title, width=88), ylabel=ylabel, xlabel="Session" if dates else "")
+    ax.set(title=_fill(title, width=88), ylabel=ylabel, xlabel="Session" if dates else "")
     ax.grid(alpha=0.2)
     if percent:
         ax.yaxis.set_major_formatter(PercentFormatter(1))
@@ -41,6 +45,15 @@ def _context(report):
     if m["status"] != "complete":
         label += f" | STOPPED: {m['stop_reason']} (partial)"
     return label
+
+
+def _ledger_context(report, name):
+    """Context label for views that need backtest ledger tables, not a P&L-series report."""
+    context = _context(report)
+    if "gross_exposure" not in report.daily.columns:
+        raise ValueError(f"plots.{name} needs a backtest report from performance(); this report has no "
+                         "ledger balance or attribution tables (for example one from series_performance)")
+    return context
 
 
 def _daily(report, column, label, ax, percent=False):
@@ -109,7 +122,7 @@ def distribution(report, *, bins=30, ax=None):
 
 
 def allocation(report, *, ax=None):
-    context = _context(report)
+    context = _ledger_context(report, "allocation")
     _, ax = _axes(ax)
     for component in report.allocation["component"].unique().sort():
         rows = report.allocation.filter(pl.col("component") == component)
@@ -125,7 +138,7 @@ def allocation(report, *, ax=None):
 
 
 def attribution(report, *, ax=None):
-    context = _context(report)
+    context = _ledger_context(report, "attribution")
     _, ax = _axes(ax)
     labels = ["Price P&L" if value == "price_pnl" else value.replace("_", " ").capitalize()
               for value in report.attribution["component"]]
@@ -159,7 +172,7 @@ def correlation(result, *, ax=None):
     artist = ax.imshow(matrix, vmin=-1, vmax=1, cmap="RdBu_r")
     ax.set_xticks(range(len(assets)), assets, rotation=30, ha="right")
     ax.set_yticks(range(len(assets)), assets)
-    ax.set_title(fill(f"Simple-return correlation ({result.metadata['basis']})", width=65) + "\n"
+    ax.set_title(_fill(f"Simple-return correlation ({result.metadata['basis']})", width=65) + "\n"
                  f"{result.metadata['sessions'][0]} to {result.metadata['sessions'][-1]} | "
                  f"n={result.values['n_obs'][0]}", fontsize=10)
     ax.figure.colorbar(artist, ax=ax, label="Pearson correlation")
@@ -221,7 +234,7 @@ def turnover(result, *, allow_partial=False, ax=None):
 
 def exposures(report, *, ax=None):
     """Prepared dollar exposure, cash, debt and receivables from the closing ledger."""
-    context = _context(report)
+    context = _ledger_context(report, "exposures")
     _, ax = _axes(ax)
     columns = [("gross_exposure", "Gross risky exposure"), ("net_exposure", "Net risky exposure"),
                ("cash", "Cash"), ("debt", "Debt"), ("dividend_receivable", "Dividend receivables")]

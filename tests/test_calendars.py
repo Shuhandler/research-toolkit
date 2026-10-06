@@ -7,7 +7,7 @@ import pytest
 import research_toolkit as rt
 from research_toolkit import adapters
 from test_series_performance import KW, pnl_table
-from test_yahoo_download import chart, provider  # noqa: F401  (provider is a fixture)
+from test_yahoo_download import chart
 
 pytest.importorskip("exchange_calendars")
 
@@ -248,3 +248,92 @@ def test_calendar_options_require_calendars(provider):
                    dict(coverage={"AAA": {"start": date(2024, 1, 2), "source": "s"}})):
         with pytest.raises(ValueError, match="require calendars"):
             rt.adapters.download_yahoo(["AAA"], start=date(2024, 1, 2), end=date(2024, 1, 5), **option)
+
+
+def test_asset_with_no_bars_raises_unless_every_session_is_explained(provider, monkeypatch):
+    script, _, _ = provider
+    args = (date(2024, 1, 2), date(2024, 1, 5))
+    # Unknown listing date and no bars: nothing explains the absence.
+    with pytest.raises(ValueError, match="no NONE observations"):
+        download(script, monkeypatch, {"NONE": bars("NONE", "America/New_York", [])}, *args)
+    # Completed sessions were expected, so even incomplete='report' does not return an empty asset.
+    with pytest.raises(ValueError, match="no NONE observations"):
+        download(script, monkeypatch, {"NONE": bars("NONE", "America/New_York", [], first_trade=date(2023, 1, 3))},
+                 *args, incomplete="report")
+    # A declared delisting before the range explains every session: an empty, complete result is correct.
+    delisted = download(script, monkeypatch, {"NONE": bars("NONE", "America/New_York", [])}, *args,
+                        coverage={"NONE": {"start": None, "end": date(2023, 12, 29), "source": "delisting notice"}})
+    assert delisted.values.is_empty() and delisted.metadata["calendar_validation"]["status"] == "complete"
+
+
+def test_download_returns_each_calendars_completed_sessions(provider, monkeypatch):
+    script, _, _ = provider
+    done = [date(2024, 11, 26), date(2024, 11, 27)]
+    result = download(script, monkeypatch, {"AAA": bars("AAA", "America/New_York", done)}, date(2024, 11, 26),
+                      date(2024, 11, 29), as_of=datetime(2024, 11, 29, 17, 30, tzinfo=UTC))
+    sessions = result.sessions["XNYS"]
+    assert list(result.sessions) == ["XNYS"] and sessions.schema == {"session": pl.Date, "close_at": pl.Datetime("us", "UTC")}
+    # 29 November (early close 18:00 UTC) had not closed by the validation time.
+    assert sessions.rows() == [(d, datetime(d.year, d.month, d.day, 21, tzinfo=UTC)) for d in done]
+    both = download(script, monkeypatch, {"AAA": bars("AAA", "America/New_York", [date(2024, 5, 3), date(2024, 5, 6)]),
+                                          "LLL.L": bars("LLL.L", "Europe/London", [date(2024, 5, 3)])},
+                    date(2024, 5, 3), date(2024, 5, 6), calendars={"AAA": "XNYS", "LLL.L": "XLON"})
+    assert list(both.sessions) == ["XLON", "XNYS"]
+    assert both.sessions["XLON"]["session"].to_list() == [date(2024, 5, 3)]  # 6 May was a UK bank holiday.
+
+
+def test_downloaded_bars_reach_the_raw_price_ledger(provider, monkeypatch):
+    script, _, _ = provider
+    days = [date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)]
+    payload = bars("AAA", "America/New_York", [date(2023, 12, 29), *days, date(2024, 1, 8)])  # Padding bars.
+    result = payload["chart"]["result"][0]
+    result["indicators"]["quote"][0].update(close=[49., 50., 51., 52., 53., 54.], volume=[10.]*6)
+    result["indicators"]["adjclose"][0]["adjclose"] = [48., 49., 50., 51., 52., 53.]
+    on = {d: int(datetime(d.year, d.month, d.day, 14, 30, tzinfo=UTC).timestamp()) for d in (date(2023, 12, 29), days[1])}
+    result["events"] = {"splits": {"s": {"date": on[days[1]], "numerator": 2, "denominator": 1}},
+                        "dividends": {"d": {"date": on[date(2023, 12, 29)], "amount": 1.}}}  # Outside the request.
+    downloaded = download(script, monkeypatch, {"AAA": payload}, days[0], days[-1])
+    assert downloaded.responses["AAA"] == payload
+    meta = {"source": "Yahoo download via toolkit", "retrieved_at": downloaded.metadata["retrieved_at"], "currency": "USD",
+            "asset_currencies": {"AAA": "USD"}, "calendar": "XNYS", "calendar_version": "exchange_calendars",
+            "timezone": "America/New_York", "price_basis": "raw", "frequency": "1d", "coverage_start": "2024-01-02",
+            "coverage_end": "2024-01-05", "actions_complete": True, "dividend_basis": "post_split_share"}
+    splits = pl.DataFrame([("s", "AAA", days[1], 2.)], schema={"action_id": pl.String, "asset": pl.String,
+                          "effective_session": pl.Date, "ratio": pl.Float64}, orient="row")
+    dividends = pl.DataFrame(schema={"action_id": pl.String, "asset": pl.String, "ex_session": pl.Date,
+                                     "pay_date": pl.Date, "cash_per_share": pl.Float64})
+    factors = pl.DataFrame({"session": days, "asset": ["AAA"]*4, "raw_price_factor": [2., 1., 1., 1.]})
+    kwargs = dict(sessions=downloaded.sessions["XNYS"], splits=splits, dividends=dividends, metadata=meta,
+                  volume_basis="split_adjusted_shares", availability="session_close_reconstructed",
+                  raw_adjustment_factors=factors, factor_metadata={"source": "independent split history",
+                  "basis": "cumulative_splits_after_session_through_retrieval", "verified_through": meta["retrieved_at"]})
+    # The untrimmed payload still holds bars and a dividend outside the request; the download is trimmed first.
+    with pytest.raises(ValueError, match="exactly match the authoritative sessions"):
+        rt.adapters.yahoo_chart(downloaded.responses, **kwargs)
+    converted = rt.adapters.yahoo_chart(downloaded, **kwargs)
+    assert converted.market.prices["close"].to_list() == [100., 51., 52., 53.]  # Split-adjusted Close x factor.
+    assert converted.metadata["source_download"]["response_sha256"]["AAA"] == \
+        downloaded.metadata["instruments"]["AAA"]["response_sha256"]
+    run = rt.buy_and_hold(converted.market, weights={"AAA": 1.}, initial_capital=1000., entry_session=days[0],
+        end_session=days[-1], policy=rt.BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
+        fractional_shares=True, initial_gross_leverage=1., terminal_action="mark_only"),
+        costs=rt.TradeCosts(commission_bps=0., half_spread_bps=0., impact_bps=0.), cash_rate=0.,
+        cash_day_count="ACT/365F").require_complete()
+    assert run.positions.filter(pl.col("session") == days[-1])["quantity"][0] == 20.  # 10 shares, then the split.
+    assert run.daily["equity"][-1] == 20 * 53.
+
+
+def test_trading_calendar_argument_errors():
+    cases = [
+        (dict(calendars="XNYS", start=date(2024, 1, 5), end=date(2024, 1, 2)), "start <= end"),
+        (dict(calendars="XNYS", start="2024-01-02", end=date(2024, 1, 5)), "datetime.date"),
+        (dict(calendars=["XNYS", "XLON"], start=date(2024, 1, 2), end=date(2024, 1, 5)), "explicit combine"),
+        (dict(calendars="XNYS", start=date(2024, 1, 2), end=date(2024, 1, 5), combine="union"), "only to several"),
+        (dict(calendars=["XNYS", "XNYS"], start=date(2024, 1, 2), end=date(2024, 1, 5), combine="union"), "unique"),
+        (dict(calendars=[], start=date(2024, 1, 2), end=date(2024, 1, 5)), "unique identifiers"),
+        (dict(calendars="  ", start=date(2024, 1, 2), end=date(2024, 1, 5)), "nonblank"),
+        (dict(calendars="XNYS", start=date(2024, 1, 6), end=date(2024, 1, 7)), "no trading sessions"),
+    ]
+    for kwargs, match in cases:
+        with pytest.raises(ValueError, match=match):
+            rt.trading_calendar(kwargs.pop("calendars"), **kwargs)

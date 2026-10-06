@@ -1,5 +1,6 @@
 """Auditable daily research, allocation and financed portfolio accounting."""
 
+from ._version import __version__ as __version__
 from ._shorts import LongShortPolicy, StockBorrow
 from ._research import lagged_features, chronological_split, standardize
 from ._research_eval import ResearchStudy

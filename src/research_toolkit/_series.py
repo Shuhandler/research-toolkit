@@ -1,6 +1,5 @@
 """Performance reports for an external daily net dollar P&L series, without a ledger."""
 
-from copy import deepcopy
 import json
 import math
 
@@ -8,7 +7,8 @@ import polars as pl
 
 from ._calendars import _reporting_sessions
 from ._data import _table
-from ._metrics import METRIC_SCHEMA, _benchmark_report, _cumulative_rows, _number, _summary
+from ._metrics import _benchmark_report, _cumulative_rows, _summary
+from ._portfolio import _finite_above
 from ._results import PerformanceResult
 from ._risk_free import _risk_free
 
@@ -39,8 +39,8 @@ def series_performance(daily, *, initial_capital, periods_per_year, risk_free_an
     TradingCalendar), every endpoint must be a session and '1d' intervals must not
     skip sessions.
     """
-    capital = _number(initial_capital, "initial_capital", lower=0)
-    a = _number(periods_per_year, "periods_per_year", lower=0)
+    capital = _finite_above(initial_capital, "initial_capital", lower=0)
+    a = _finite_above(periods_per_year, "periods_per_year", lower=0)
     if not isinstance(daily, pl.DataFrame) or set(PNL_SCHEMA) - set(daily.columns):
         raise ValueError(f"daily must be a Polars DataFrame with columns {list(PNL_SCHEMA)}")
     duplicated = daily.filter(pl.col("session").is_duplicated())["session"].unique().sort().to_list()
@@ -63,7 +63,7 @@ def series_performance(daily, *, initial_capital, periods_per_year, risk_free_an
         raise ValueError("sharpe_denominator must be portfolio_returns or excess_returns")
 
     checked = _check_sessions(daily, calendar, frequency)
-    previous_session, nav, accumulated, wealth = None, capital, 0.0, 1.0
+    nav, accumulated, wealth = capital, 0.0, 1.0
     rows = []
     for start, session, pnl in daily.iter_rows():
         opening, nav = nav, nav + pnl
@@ -73,7 +73,6 @@ def series_performance(daily, *, initial_capital, periods_per_year, risk_free_an
         accumulated += r
         wealth *= 1 + r
         rows.append((start, session, opening, pnl, nav, r, nav - capital, accumulated, wealth - 1))
-        previous_session = session
     daily = pl.DataFrame(rows, schema={"period_start": pl.Date, "session": pl.Date,
         **{k: pl.Float64 for k in ("opening_equity", "pnl", "equity", "simple_return", "cumulative_pnl",
                                    "cumulative_simple_return", "compounded_return")}}, orient="row")
@@ -83,7 +82,7 @@ def series_performance(daily, *, initial_capital, periods_per_year, risk_free_an
     mar = None
     mar_period = 0.0
     if minimum_acceptable_return_annual_effective is not None:
-        mar = _number(minimum_acceptable_return_annual_effective, "minimum_acceptable_return_annual_effective", lower=-1)
+        mar = _finite_above(minimum_acceptable_return_annual_effective, "minimum_acceptable_return_annual_effective", lower=-1)
         try:
             mar_period = math.expm1(math.log1p(mar)/a)
         except OverflowError as exc:

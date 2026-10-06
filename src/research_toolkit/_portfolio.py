@@ -9,10 +9,18 @@ import polars as pl
 
 
 def _number(value, name, *, positive=False):
+    """Finite real (bool excluded) that is nonnegative, or strictly positive."""
     if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
         raise ValueError(f"{name} must be finite numeric input")
     if value < 0 or (positive and value == 0):
         raise ValueError(f"{name} must be {'positive' if positive else 'nonnegative'}")
+    return float(value)
+
+
+def _finite_above(value, name, *, lower):
+    """Finite real (bool excluded) strictly greater than ``lower``; same accepted types as ``_number``."""
+    if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value) or value <= lower:
+        raise ValueError(f"{name} must be finite and greater than {lower}")
     return float(value)
 
 

@@ -9,10 +9,12 @@ from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from ._data import (_table, prepare_market_data, PRICE_SCHEMA, SESSION_SCHEMA,
+from ._data import (_table, prepare_market_data as _prepare_market_data, PRICE_SCHEMA, SESSION_SCHEMA,
                     SPLIT_SCHEMA, DIVIDEND_SCHEMA)
 from ._calendars import _exchange_sessions
 from ._results import ProviderDataResult, ProviderDownloadResult
+
+__all__ = ["yahoo_chart", "download_yahoo"]
 
 FACTOR_SCHEMA = {"session": pl.Date, "asset": pl.String, "raw_price_factor": pl.Float64}
 
@@ -21,12 +23,17 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
                 availability, raw_adjustment_factors=None, factor_metadata=None) -> ProviderDataResult:
     """Convert saved decoded Yahoo daily chart responses, without network access.
 
-    metadata.price_basis selects split_adjusted Close, total_return_adjusted Adj
-    Close, or explicitly reconstructed raw Close. Raw requires complete supplied
-    cumulative split factors through retrieval, even when every factor is one.
-    Authoritative calendars/actions/payment dates are always caller supplied.
-    See docs/notebook-extensions.md for the restricted supported provider contract.
+    ``responses`` maps assets to decoded chart JSON, or is a ``ProviderDownloadResult``
+    from ``download_yahoo``; its retained payloads are first limited to the download's
+    inclusive requested sessions. metadata.price_basis selects split_adjusted Close,
+    total_return_adjusted Adj Close, or explicitly reconstructed raw Close. Raw
+    requires complete supplied cumulative split factors through retrieval, even when
+    every factor is one. Authoritative calendars/actions/payment dates are always
+    caller supplied. See docs/notebook-extensions.md for the provider contract.
     """
+    source_download = None
+    if isinstance(responses, ProviderDownloadResult):
+        source_download, responses = responses, _download_payloads(responses)
     if not isinstance(responses, Mapping) or not responses or any(not isinstance(a, str) or not a.strip() for a in responses):
         raise ValueError("responses must map asset identifiers to decoded Yahoo chart JSON")
     if availability != "session_close_reconstructed":
@@ -100,15 +107,11 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
             adjusted = adjusted_blocks[0]["adjclose"] if adjusted_blocks else [None]*len(days)
             if any(len(v) != len(days) for v in (close, volume, adjusted)):
                 raise ValueError("provider arrays have mismatched lengths")
-            for d, timestamp, p, v, adj in zip(days, timestamps, close, volume, adjusted):
-                def number(x, name, optional=False):
-                    if x is None and optional:
-                        return None
-                    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or x < 0 or (name != "volume" and x == 0):
-                        raise ValueError(f"invalid provider {name} for {asset} on {d}")
-                    return float(x)
-                p, v = number(p, "close"), number(v, "volume", optional=volume_basis == "unknown")
-                adj = number(adj, "adjusted close", optional=basis != "total_return_adjusted")
+            for d, timestamp, close_value, volume_value, adjusted_value in zip(days, timestamps, close, volume, adjusted):
+                where = f"{asset} on {d}"
+                p = _provider_number(close_value, "close", where)
+                v = _provider_number(volume_value, "volume", where, optional=volume_basis == "unknown")
+                adj = _provider_number(adjusted_value, "adjusted close", where, optional=basis != "total_return_adjusted")
                 f = factors.get((d, asset))
                 raw_volume = v if volume_basis == "raw_shares" else v/f if f is not None and volume_basis == "split_adjusted_shares" else None
                 selected = p*f if basis == "raw" else adj if basis == "total_return_adjusted" else p
@@ -136,8 +139,13 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
         availability_limitation="session close proxy; not observed publication time or point-in-time revision history",
         action_source="authoritative caller tables; provider event amounts are not substituted",
         raw_factor_metadata=factor_info)
+    if source_download is not None:
+        source = source_download.metadata
+        adapter["source_download"] = {"requested_start": source["requested_start"], "requested_end": source["requested_end"],
+            "retrieved_at": source["retrieved_at"], "bars": "limited_to_requested_inclusive_sessions",
+            "response_sha256": {a: source["instruments"][a]["response_sha256"] for a in source["assets"]}}
     meta["adapter"] = adapter
-    market = prepare_market_data(prices=pl.DataFrame(prices, schema=PRICE_SCHEMA, orient="row"),
+    market = _prepare_market_data(prices=pl.DataFrame(prices, schema=PRICE_SCHEMA, orient="row"),
         sessions=calendar, splits=split_table, dividends=dividend_table, metadata=meta)
     bar_table = pl.DataFrame(bars, schema={"session": pl.Date, "asset": pl.String, "provider_timestamp": pl.Int64,
         "provider_close": pl.Float64, "provider_adjclose": pl.Float64, "provider_volume": pl.Float64,
@@ -149,6 +157,46 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
     diagnostics = pl.DataFrame({"code": ["reconstructed_availability", "caller_supplied_action_completeness", "declared_volume_basis"],
         "detail": [adapter["availability_limitation"], adapter["action_source"], volume_basis]})
     return ProviderDataResult(market, bar_table, diagnostics, adapter)
+
+
+def _provider_number(x, name, where, optional=False):
+    """A provider value as float: finite, nonnegative, and nonzero except volume; None only if optional."""
+    if x is None and optional:
+        return None
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x) or x < 0 or (name != "volume" and x == 0):
+        raise ValueError(f"invalid provider {name} for {where}")
+    return float(x)
+
+
+def _download_payloads(download):
+    """Retained decoded payloads, limited to the download's inclusive requested sessions."""
+    meta = download.metadata
+    if not download.responses or set(download.responses) != set(meta.get("assets", ())):
+        raise ValueError("this ProviderDownloadResult does not retain the decoded provider responses")
+    start, end = date.fromisoformat(meta["requested_start"]), date.fromisoformat(meta["requested_end"])
+    payloads = {}
+    for asset, original in download.responses.items():
+        payload = deepcopy(original)
+        try:
+            result = payload["chart"]["result"][0]
+            zone = ZoneInfo(result["meta"]["exchangeTimezoneName"])
+            stamps = result.get("timestamp") or []
+            keep = [i for i, t in enumerate(stamps) if start <= _local_date(t, zone) <= end]
+            result["timestamp"] = [stamps[i] for i in keep]
+            for block in [*result["indicators"].get("quote", []), *result["indicators"].get("adjclose", [])]:
+                for key, values in block.items():
+                    if isinstance(values, list):
+                        block[key] = [values[i] for i in keep]
+            for kind, items in (result.get("events") or {}).items():
+                result["events"][kind] = {k: v for k, v in items.items() if start <= _local_date(v["date"], zone) <= end}
+        except (KeyError, TypeError, IndexError, ValueError) as exc:
+            raise ValueError(f"malformed retained Yahoo response for {asset}") from exc
+        payloads[asset] = payload
+    return payloads
+
+
+def _local_date(stamp, zone):
+    return datetime.fromtimestamp(stamp, timezone.utc).astimezone(zone).date()
 
 
 YAHOO_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
@@ -174,9 +222,12 @@ def _yahoo_get(url, *, timeout, max_attempts, backoff_seconds):
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read(), attempt
         except urllib.error.HTTPError as exc:
-            if exc.code != 429 and exc.code < 500:
-                detail = exc.read()[:500].decode("utf-8", "replace")
-                raise ValueError(f"Yahoo rejected the request (HTTP {exc.code}): {detail}") from exc
+            try:
+                if exc.code != 429 and exc.code < 500:
+                    detail = exc.read()[:500].decode("utf-8", "replace")
+                    raise ValueError(f"Yahoo rejected the request (HTTP {exc.code}): {detail}") from exc
+            finally:
+                exc.close()
             last = exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last = exc
@@ -203,7 +254,13 @@ def download_yahoo(assets, *, start, end, timeout=10.0, max_attempts=3, backoff_
     unexpected or not-yet-closed bars raise, or with incomplete='report' are listed
     and the result status is 'incomplete'. ``coverage`` declares known listing or
     delisting limits; ``exclusions`` explains suspensions/unscheduled closures.
-    Without calendars, missing sessions cannot be fully detected.
+    Without calendars, missing sessions cannot be fully detected. An asset with no
+    bars in range raises unless calendar validation shows that no completed session
+    was expected for it (declared coverage, exclusions or closes after ``as_of``).
+
+    Output rows follow the requested asset order, then session. ``sessions`` holds
+    each calendar's completed sessions for ``prepare_market_data``, and ``responses``
+    keeps the decoded payloads for ``yahoo_chart`` raw-price reconstruction.
     """
     import urllib.parse
     if isinstance(assets, str) or not isinstance(assets, (list, tuple)) or not assets \
@@ -223,13 +280,17 @@ def download_yahoo(assets, *, start, end, timeout=10.0, max_attempts=3, backoff_
     period2 = int(datetime.combine(end + timedelta(days=2), time.min, timezone.utc).timestamp())
     params = {"period1": period1, "period2": period2, "interval": "1d", "events": "div,split",
               "includeAdjustedClose": "true"}
-    rows, diagnostics, instruments = [], [], {}
+    rows: list[tuple] = []
+    diagnostics: list[tuple] = []
+    instruments, payloads = {}, {}
+    cutoffs: dict[str, datetime] = {}
     for asset in assets:
         url = YAHOO_CHART_URL.format(symbol=urllib.parse.quote(asset, safe="")) + "?" + urllib.parse.urlencode(params)
         body, attempts = _yahoo_get(url, timeout=timeout, max_attempts=max_attempts, backoff_seconds=backoff_seconds)
         retrieved = _now()
         try:
-            chart = json.loads(body)["chart"]
+            decoded = json.loads(body)
+            chart = decoded["chart"]
             if chart.get("error") is not None or len(chart["result"]) != 1:
                 raise ValueError(f"Yahoo returned an error for {asset}: {chart.get('error')}")
             result = chart["result"][0]
@@ -270,14 +331,20 @@ def download_yahoo(assets, *, start, end, timeout=10.0, max_attempts=3, backoff_
                 diagnostics.append((asset, session, "session_open_at_retrieval",
                                     "retrieved before the regular session ended; values may be intraday"))
             asset_rows[session] = (session, asset, *values)
-        if not asset_rows and calendars is None:
-            raise ValueError(f"Yahoo returned no {asset} observations from {start} to {end}")
-        rows.extend(asset_rows[d] for d in sorted(asset_rows))
         validation = None
         if calendars is not None:
             validation, found = _validate_sessions(asset, set(asset_rows), provider, zone, start, end,
                 retrieved, checks)
             diagnostics.extend(found)
+            name, cutoff = checks["calendars"][asset], checks["as_of"] or retrieved
+            cutoffs[name] = min(cutoffs.get(name, cutoff), cutoff)
+        # Never return a requested asset with no bars unless the calendar explains every absence.
+        if not asset_rows and (validation is None or validation["expected_sessions"] or validation["coverage_uncertain"]):
+            raise ValueError(f"Yahoo returned no {asset} observations from {start} to {end}"
+                             + ("" if validation is None else "; no declared coverage limit, exclusion or "
+                                "not-yet-closed session explains the absence"))
+        rows.extend(asset_rows[d] for d in sorted(asset_rows))
+        payloads[asset] = decoded
         instruments[asset] = {"calendar_validation": validation,"provider_symbol": provider.get("symbol"), "currency": provider.get("currency"),
             "exchange": provider.get("exchangeName"), "exchange_timezone": provider["exchangeTimezoneName"],
             "instrument_type": provider.get("instrumentType"), "url": url, "attempts": attempts,
@@ -316,7 +383,10 @@ def download_yahoo(assets, *, start, end, timeout=10.0, max_attempts=3, backoff_
                     for a, v in ((a, i["calendar_validation"]) for a, i in instruments.items()) if v["status"] == "incomplete"]
         raise ValueError("Yahoo data is incomplete against the exchange calendars (pass incomplete='report' to "
                          "inspect, or explain suspensions/closures in exclusions): " + " | ".join(problems))
-    return ProviderDownloadResult(values, pl.DataFrame(diagnostics, schema=DOWNLOAD_DIAGNOSTIC_SCHEMA, orient="row"), metadata)
+    calendar_sessions = {name: pl.DataFrame([(d, close) for d, close in _exchange_sessions(name, start, end)[0] if close <= cutoff],
+                                            schema=SESSION_SCHEMA, orient="row") for name, cutoff in sorted(cutoffs.items())}
+    return ProviderDownloadResult(values, pl.DataFrame(diagnostics, schema=DOWNLOAD_DIAGNOSTIC_SCHEMA, orient="row"),
+                                  metadata, calendar_sessions, payloads)
 
 
 EXCLUSION_SCHEMA = {"asset": pl.String, "session": pl.Date, "reason": pl.String}

@@ -8,10 +8,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import polars as pl
 
-from ._data import _table, _identity, SESSION_SCHEMA
+from ._data import UTC, _table, _identity, SESSION_SCHEMA
 from ._results import FeatureResult, ResearchSplit
 
-UTC = pl.Datetime("us", "UTC")
 KEYS = {"session": pl.Date, "asset": pl.String}
 LABEL_SCHEMA = {**KEYS, "label_end": pl.Date, "available_at": UTC, "target": pl.Float64}
 TRANSFORM_SCHEMA = {"feature": pl.String, "mean": pl.Float64, "scale": pl.Float64,

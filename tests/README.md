@@ -22,17 +22,27 @@ schemas, provenance, sessions, and portfolio policies.
   drawdown, strict benchmark alignment, interval/NAV validation, plot and
   comparison compatibility, VaR ranks, ties and independent dollar tails.
 - `test_yahoo_download.py`: mocked downloads, inclusive exchange-local dates,
-  retries/timeouts, failures, duplicates and reported missing values.
+  retries/timeouts (closing every HTTP error), failures, duplicates, reported missing
+  values, request-ordered rows, retained payloads and bars still open at retrieval.
 - `test_calendars.py`: real exchange calendars offline: skipped sessions (even
   when every asset lacks them), holidays, early closes, DST, before/after close,
-  listing limits, suspensions, multi-exchange and multi-session intervals.
+  listing limits, suspensions, multi-exchange and multi-session intervals, assets
+  with no bars, returned session tables, calendar argument errors, and a download
+  converted by `yahoo_chart` into raw prices and run through `buy_and_hold`.
   Skipped unless the `calendar` extra is installed.
+- `test_public_api.py`: every `rt.*` call named in the README and API docs exists
+  and is exported; `__version__`, `__all__`, and plot views without other tests
+  (risk contributions, histogram counts, split markers, ledger-only errors, guards).
+- `test_validation_guards.py`: documented rejections across the public API, cost
+  solver guard rails, comparison guards, restored research audits, malformed Yahoo
+  payloads, numpy number handling and tail risk on a report with no intervals.
 - `test_plots.py`: lazy optional imports, plotted values/dates, reusable axes,
   stopped labels and rendering; plotting tests skip when the extra is absent.
 - `test_acceptance.py`: saved one-year inputs, five holdings, $100 million,
   all-cash/financed cases and independent balance/attribution reconstruction.
 
-Install `.[test,plot]` to run every unit/integration test. The acceptance notebook
+Install `.[test,plot,calendar]` to run every unit/integration test (calendar tests
+skip without the `calendar` extra; the notebook test stubs IPython's `display`). The acceptance notebook
 complements these checks; run `python examples/run_acceptance.py` with the notebook
 extra to render it and inspect the figures. See [the testing plan](../docs/testing-plan.md).
 

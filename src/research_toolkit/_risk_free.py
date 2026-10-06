@@ -1,13 +1,14 @@
 """Explicit dated benchmark-rate conversion; independent of cash and borrowing."""
 from copy import deepcopy
-from datetime import datetime, time, timedelta, timezone
+from datetime import timedelta
 import json
 import math
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import polars as pl
 
-from ._data import _table
+from ._data import _local_midnight_utc, _table
+from ._portfolio import _finite_above
 from ._results import RiskFreeResult
 
 INTERVAL_SCHEMA = {"period_start": pl.Date, "session": pl.Date}
@@ -68,7 +69,7 @@ def risk_free_returns(daily_rates, *, intervals, day_count, compounding, rate_ti
     divisor = 360 if day_count == "ACT/360" else 365
     daily = {}
     for day, rate, available in rates.iter_rows():
-        cutoff = datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
+        cutoff = _local_midnight_utc(day, zone)
         if available > cutoff:
             raise ValueError(f"rate for {day} was unavailable at accrual start")
         if 1+rate/divisor <= 0:
@@ -97,8 +98,7 @@ def _risk_free(daily, currency, annual, supplied, metadata, periods_per_year, fr
     if supplied is None:
         if metadata is not None:
             raise ValueError("risk_free_metadata requires risk_free_returns")
-        if isinstance(annual, bool) or not isinstance(annual, (int, float)) or not math.isfinite(annual) or annual <= -1:
-            raise ValueError("risk_free_annual_effective must be finite and greater than -1")
+        annual = _finite_above(annual, "risk_free_annual_effective", lower=-1)
         try:
             periodic = math.expm1(math.log1p(annual)/periods_per_year)
         except OverflowError as exc:

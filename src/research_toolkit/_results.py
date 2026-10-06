@@ -1,6 +1,6 @@
 """Concrete numerical containers. No calculation, plotting, or I/O side effects."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
@@ -174,10 +174,17 @@ class TradingCalendar:
 
 @dataclass(frozen=True)
 class ProviderDownloadResult:
-    """Long provider observations as reported, with retrieval/request provenance."""
+    """Long provider observations as reported, with retrieval/request provenance.
+
+    ``sessions`` maps each validation calendar to its completed sessions in the
+    requested range (empty without calendars). ``responses`` keeps each asset's
+    decoded provider payload so ``adapters.yahoo_chart`` can rebuild raw prices.
+    """
     values: pl.DataFrame
     diagnostics: pl.DataFrame
     metadata: dict[str, Any]
+    sessions: dict[str, pl.DataFrame] = field(default_factory=dict)
+    responses: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -361,3 +361,23 @@ union/intersection reporting calendar. Engineering choices: missing completed
 sessions raise by default (`incomplete="report"` returns status `incomplete`);
 unknown listing dates make only pre-first-bar gaps `coverage_uncertain`;
 suspensions need caller-supplied exclusions.
+
+## Audit follow-up — user requests
+
+After a full audit, the user asked for the Medium findings, the integration gaps
+and the Low items to be fixed, with two explicit choices: `download_yahoo` keeps
+rows in the order the assets were requested (the docs now say so instead of
+"sorted by asset"), and `compare_performance` keeps its behaviour for unequal
+coverage while its error now names coverage as the cause. Engineering choices made
+within that request:
+
+- An asset with no bars raises unless calendar validation explains every session
+  (declared coverage, exclusions, or closes after the validation time).
+- `ProviderDownloadResult` gains `sessions` (completed sessions per calendar) and
+  `responses` (decoded payloads); `yahoo_chart` accepts a download and limits its
+  payloads to the requested inclusive sessions before the usual strict checks.
+- The `calendar` extra requires `exchange_calendars>=4.5.6`, the first release that
+  imports under pandas 3.
+- Ledger-only plots raise `ValueError` for P&L-series reports. `rt.__version__`,
+  `__all__` for `plots`/`adapters`, one numeric validator family, one local-midnight
+  cutoff helper, and the `_Ledger` class (with bit-identical outputs) were added.

@@ -10,6 +10,34 @@ import polars as pl
 from ._results import PerformanceResult, ComparisonResult
 
 
+def _encoded(value):
+    return json.dumps(value, default=lambda x: x.isoformat(), sort_keys=True, allow_nan=False)
+
+
+def _reject_strict_mismatch(label, mismatched, signature, reference, coverage, assumptions):
+    """Raise for the first strict mismatch, naming coverage when it is the actual cause.
+
+    Risk-free and benchmark rows are keyed by holding interval, so unequal coverage
+    always changes them too, even for an identical scalar rate or benchmark source.
+    Accepting separate coverage must not silently accept a changed RF or benchmark rule.
+    """
+    if "coverage" in mismatched and coverage == "strict":
+        raise ValueError(f"scenario {label!r} covers different holding intervals or a different requested end; "
+                         "select coverage='separate' (and assumptions='separate', because risk-free and "
+                         "benchmark rows follow coverage)")
+    if assumptions != "strict":
+        return
+    for field in mismatched:
+        if field == "coverage":
+            continue
+        same_rule = (field == "risk_free" and all(signature[field][k] == reference[field][k] for k in ("metadata", "annual_effective"))
+                     or field == "benchmark" and signature[field]["metadata"] == reference[field]["metadata"])
+        if "coverage" in mismatched and same_rule:
+            raise ValueError(f"scenario {label!r} has the same {field} convention, but its {field} rows cover different "
+                             "intervals because coverage differs; unequal coverage also requires assumptions='separate'")
+        raise ValueError(f"scenario {label!r} has incompatible {field}; select explicit separate handling")
+
+
 def compare_performance(reports, *, benchmark_label=None, coverage="strict",
                         assumptions="strict", allow_partial=False) -> ComparisonResult:
     """Combine prepared reports without recalculation or hidden sample intersection.
@@ -24,7 +52,8 @@ def compare_performance(reports, *, benchmark_label=None, coverage="strict",
         raise ValueError("coverage/assumptions must be strict or separate; allow_partial must be boolean")
     if benchmark_label is not None and (not isinstance(benchmark_label, str) or not benchmark_label.strip() or benchmark_label in reports):
         raise ValueError("benchmark_label must be nonblank and distinct from scenario labels")
-    rows, diagnostics, seen = [], [], {}
+    rows, seen = [], {}
+    diagnostics: list[tuple[str, str, str, str]] = []
     reference = None
     configs = {}
     for label, report in reports.items():
@@ -41,15 +70,9 @@ def compare_performance(reports, *, benchmark_label=None, coverage="strict",
         signature["benchmark"] = {"metadata": m.get("benchmark"), "series": report.benchmark_series.to_dicts()}
         if reference is None:
             reference = signature
-        for field, value in signature.items():
-            # RF observations necessarily have different keys when coverage differs;
-            # accepting separate coverage must not silently accept a changed RF rule.
-            if value != reference[field]:
-                encoded = lambda v: json.dumps(v, default=lambda x: x.isoformat(), sort_keys=True, allow_nan=False)
-                diagnostics.append((label, field, encoded(reference[field]), encoded(value)))
-                mode = coverage if field == "coverage" else assumptions
-                if mode == "strict":
-                    raise ValueError(f"scenario {label!r} has incompatible {field}; select explicit separate handling")
+        mismatched = [field for field, value in signature.items() if value != reference[field]]
+        diagnostics.extend((label, field, _encoded(reference[field]), _encoded(signature[field])) for field in mismatched)
+        _reject_strict_mismatch(label, mismatched, signature, reference, coverage, assumptions)
         configs[label] = deepcopy(m)
         metrics = pl.concat([report.summary, report.benchmark_comparison.filter(pl.col("metric").is_in(["return_correlation", "beta", "annualized_tracking_error", "information_ratio"]))])
         entries = [(label, "portfolio", metrics)]

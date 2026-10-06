@@ -1,6 +1,5 @@
 import json
 
-import polars as pl
 import pytest
 
 import research_toolkit as rt

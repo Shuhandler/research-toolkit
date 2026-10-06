@@ -1,28 +1,11 @@
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date, datetime, time, timedelta, timezone
 import math
 
 import polars as pl
 import pytest
 import research_toolkit as rt
-from research_toolkit._research import LABEL_SCHEMA
 from research_toolkit._research_eval import PREDICTION_SCHEMA
-
-
-@pytest.fixture
-def research_inputs():
-    # Fifteen supplied weekday sessions, not an inferred exchange calendar.
-    days = [date(2024, 1, 2)+timedelta(days=i) for i in range(21) if (date(2024, 1, 2)+timedelta(days=i)).weekday() < 5]
-    closes = [datetime.combine(d, time(21), timezone.utc) for d in days]
-    sessions = pl.DataFrame({"session": days, "close_at": closes}, schema={"session": pl.Date, "close_at": pl.Datetime("us", "UTC")})
-    observations = pl.DataFrame([(d, a, t, float(i + offset)) for i, (d, t) in enumerate(zip(days, closes))
-        for a, offset in [("A", 1), ("B", 3)]],
-        schema={"session": pl.Date, "asset": pl.String, "available_at": pl.Datetime("us", "UTC"), "x": pl.Float64}, orient="row")
-    labels = pl.DataFrame([(d, a, days[i+1], closes[i+1], float(i%2)) for i, d in enumerate(days[:13]) for a in ["A", "B"]], schema=LABEL_SCHEMA, orient="row")
-    meta = dict(source="synthetic measurements", calendar="supplied weekday fixture", calendar_version="1", timezone="America/New_York",
-                frequency="1d", feature_units={"x": "arbitrary_units"})
-    return dict(days=days, sessions=sessions, observations=observations, labels=labels, metadata=meta)
 
 
 def features(data, *, observations=None, lags=(1,)):

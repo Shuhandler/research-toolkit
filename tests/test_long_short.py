@@ -1,6 +1,5 @@
 """Small independent cash, share and P&L oracles for signed portfolios."""
 from datetime import date, datetime, timezone, timedelta
-from dataclasses import replace
 
 import polars as pl
 import pytest

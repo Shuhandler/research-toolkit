@@ -2,15 +2,14 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from datetime import datetime, time, timedelta, timezone
+from datetime import timedelta
 import math
 import json
 import hashlib
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from ._data import _table
+from ._data import _local_midnight_utc, _table
 from ._portfolio import _number
 
 
@@ -88,7 +87,8 @@ class StockBorrow:
 
 
 def _cutoff(day):
-    return datetime.combine(day, time(), ZoneInfo("America/New_York")).astimezone(timezone.utc)
+    """New York midnight at the start of a borrow-fee accrual date, in UTC."""
+    return _local_midnight_utc(day, "America/New_York")
 
 
 def _borrow_plan(config, assets, start, end):

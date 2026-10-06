@@ -24,7 +24,8 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_shorts.py` | Explicit signed position contracts, post-cost sizing, segregated collateral policy, and stock-borrow rate validation | Long/short extension |
 | `_financing.py` | Explicit fixed cash/loan rates, day count, sweep and margin configuration | 1C |
 | `_sofr.py` | Historical SOFR/publication contracts, source identity, known-rate selection and loan policy | Post-M2 |
-| `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation | 1B–2 |
+| `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation. `_simulate` builds one `_Ledger` (validated setup, `enter`, `run`, `result`) | 1B–2 |
+| `_version.py` | Installed distribution version for `rt.__version__` and run metadata | Post-M3 |
 | `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
 | `_metrics.py` | Performance tables, benchmark comparisons, result validation, historical VaR/ETL | 1D onward |
 | `_calendars.py` | Optional exchange-calendar sessions/closes and explicit reporting calendars | Post-M3 |

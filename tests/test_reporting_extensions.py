@@ -1,6 +1,4 @@
-from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
-import math
+from datetime import date, datetime, timezone
 
 import polars as pl
 import pytest
@@ -132,8 +130,11 @@ def test_comparison_unequal_coverage_and_stopped_status(inputs, run, policy, plt
     reports = {"Full": full, "Stopped": partial}
     with pytest.raises(ValueError, match="allow_partial"):
         rt.compare_performance(reports)
-    with pytest.raises(ValueError, match="incompatible"):
+    with pytest.raises(ValueError, match="covers different holding intervals"):
         rt.compare_performance(reports, allow_partial=True)
+    # Same scalar risk-free rate, but its rows follow coverage: the message names coverage as the cause.
+    with pytest.raises(ValueError, match="same risk_free convention, but its risk_free rows cover different intervals"):
+        rt.compare_performance(reports, allow_partial=True, coverage="separate")
     table = rt.compare_performance(reports, allow_partial=True, coverage="separate", assumptions="separate")
     rows = table.values.filter(pl.col("scenario") == "Stopped")
     assert rows["run_status"].unique().to_list() == ["stopped"]

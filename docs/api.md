@@ -9,7 +9,8 @@ Use `import research_toolkit as rt`. Core functions are `prepare_market_data`,
 `size_entry_orders`, `risk_free_returns`, `compare_performance`,
 `rt.adapters.yahoo_chart`, and additions to existing functions/result tables.
 Result/configuration objects are concrete dataclasses; their tables are Polars
-DataFrames. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
+DataFrames. `rt.__version__` is the installed version, which every backtest also
+records as `metadata["package_version"]`. See the [acceptance notebook](../examples/buy_and_hold_equities.ipynb)
 for a complete offline workflow and the smaller [ledger example](../examples/unlevered_buy_and_hold.py).
 
 Next-open/intraday execution, fixed/minimum ticket fees and walk-forward model
@@ -990,8 +991,9 @@ values, an empty table, and NAV that reaches zero or below raise.
 `initial_capital` and `periods_per_year` must be positive and finite; the risk-free
 and optional MAR rates follow the `performance()` effective-annual conversion. Only
 the scalar risk-free rate is accepted. `metadata` must be finite JSON with a nonblank
-`currency`; `frequency`, when given, must be `1d`, and report fields such as `status`
-or `initial_capital` are rejected. It is kept as `metadata["source_metadata"]`.
+`currency`; `frequency`, when given, must equal the `frequency` argument (`1d` by
+default, or `multi_session`), and report fields such as `status` or `initial_capital`
+are rejected. It is kept as `metadata["source_metadata"]`.
 Benchmarks use the same strict alignment, metadata and calculations as
 `performance()`; mismatched intervals raise rather than being dropped.
 
@@ -1002,7 +1004,8 @@ row at the first `period_start`, so a first-interval loss is a drawdown.
 `allocation` and `attribution` are typed empty tables. `return_basis` is
 `net_equity`, so `compare_performance()` can compare it with ledger reports. The
 `pnl`, `returns`, `equity`, `drawdown`, `distribution` and `cumulative_returns` plots
-accept it unchanged; `allocation`, `attribution` and `exposures` need ledger data.
+accept it unchanged; `allocation`, `attribution` and `exposures` need ledger tables and
+raise a `ValueError` saying so when given a P&L-series report.
 
 ### `tail_risk`
 
@@ -1024,8 +1027,10 @@ is that count. Signs are preserved: a negative VaR or ETL is a loss. For returns
 Dollar figures apply the same rule independently to interval net dollar `pnl`.
 When NAV changes, the worst returns and the worst dollar P&L can be different
 intervals, so `n_tail_pnl` is reported separately and dollar VaR is **not** return
-VaR multiplied by a NAV. An empty report gives null values with `empty_sample`;
-otherwise `status` is `ok` and small samples remain visible through `n_obs`.
+VaR multiplied by a NAV. `performance()` and `series_performance()` always return at
+least one interval; a report whose `daily` table has no rows (for example one built by
+hand with `dataclasses.replace`) gives null values with `empty_sample`. Otherwise
+`status` is `ok` and small samples remain visible through `n_obs`.
 
 ### `adapters.download_yahoo`
 
@@ -1049,14 +1054,18 @@ instants, so the adapter requests a window padded by a day on each side and keep
 local sessions from `start` through `end`.
 
 `ProviderDownloadResult.values` is a long table (`session: Date`, `asset: String`,
-`close`, `adj_close`, `volume: Float64`) sorted by asset and session. `close` is
+`close`, `adj_close`, `volume: Float64`) in the order the assets were requested, then
+by session. `close` is
 Yahoo Close, which Yahoo adjusts for **splits but not dividends**; it is not a raw
 execution price (see the [offline adapter](notebook-extensions.md#offline-saved-yahoo-chart-adapter)).
 `adj_close` is Adj Close (splits and distributions). `volume` is as reported, and its
 split basis is not verified. Columns are never substituted for each other.
 
-Duplicate sessions, malformed or mismatched arrays, wrong frequency, invalid prices,
-provider errors and an asset with no observations in range raise. Null provider
+Duplicate sessions, malformed or mismatched arrays, wrong frequency, invalid prices
+and provider errors raise. An asset with no observations in range raises; with
+`calendars=` it is returned empty only when calendar validation shows that no
+completed session was expected for it (declared coverage limits, exclusions, or every
+session closing after the validation time). Null provider
 values remain null and are listed in `diagnostics` (`asset`, `session`, `code`,
 `detail`) as `missing_value`. With no calendar, the adapter can only flag
 `session_not_reported` when another requested asset in the same exchange timezone
@@ -1068,14 +1077,47 @@ bar) and `mixed_currencies`. Nothing is forward-filled.
 dates, boundary and session conventions, column bases, UTC `retrieved_at`, retry
 settings, and per-asset symbol, currency, exchange, timezone, URL, attempts,
 retrieval time and response SHA-256. Yahoo history can be revised; it is not a
-point-in-time vintage. To build `MarketData`, supply an authoritative calendar and
-actions and use the documented price-basis rules.
+point-in-time vintage.
+
+Two more fields carry the download into the rest of the toolkit:
+
+- `sessions` maps each calendar passed in `calendars=` to its `session: Date`,
+  `close_at: Datetime(UTC)` table of completed sessions in the requested range (those
+  whose scheduled close is at or before the earliest validation time among that
+  calendar's assets). It is the `sessions=` input of `prepare_market_data` and
+  `yahoo_chart`. It is empty without calendars.
+- `responses` keeps each asset's decoded provider payload exactly as received,
+  including the padding bars outside the requested range.
+
+`close` is split-adjusted, so a backtest needs raw prices rebuilt from it. Pass the
+download itself to `yahoo_chart`, which first limits the retained payloads (bars and
+corporate-action events) to the download's inclusive requested sessions:
+
+```python
+download = rt.adapters.download_yahoo(["AAA"], start=start, end=end, calendars={"AAA": "XNYS"})
+converted = rt.adapters.yahoo_chart(
+    download, sessions=download.sessions["XNYS"], splits=splits, dividends=dividends,
+    metadata=market_metadata | {"price_basis": "raw", "retrieved_at": download.metadata["retrieved_at"]},
+    volume_basis="split_adjusted_shares", availability="session_close_reconstructed",
+    raw_adjustment_factors=factors, factor_metadata=factor_metadata,
+)
+result = rt.buy_and_hold(converted.market, ...)  # raw execution prices
+```
+
+The authoritative split and dividend tables, cumulative split factors and payment
+dates are still the caller's (see the [offline adapter](notebook-extensions.md#offline-saved-yahoo-chart-adapter)).
+The conversion records the download's request window, retrieval time and response
+hashes under `metadata["source_download"]`. All assets in one conversion must share a
+currency and exchange timezone; download other exchanges separately. Building a
+dollar-volume table for `estimate_liquidity` from `volume` remains an explicit caller
+step because Yahoo's volume adjustment is not verified.
 
 ## Calendar-aware session validation
 
 Install the optional extra with `pip install -e '.[calendar]'`. It adds the maintained
 [`exchange_calendars`](https://github.com/gerrymanoim/exchange_calendars) library
-(and pandas), loaded only when a calendar is requested; `import research_toolkit`
+(and pandas), loaded only when a calendar is requested. Version 4.5.6 or later is
+required: 4.5 itself fails to import under pandas 3. `import research_toolkit`
 still imports neither. Calendars are always explicit exchange identifiers such as
 `XNYS`, `XLON` or `XTKS`, never inferred from tickers. Without a calendar, existing
 behavior is unchanged: only interval order and continuity are checked, so a
@@ -1132,6 +1174,7 @@ download = rt.adapters.download_yahoo(
     as_of=None,                # validation time; defaults to retrieval time
 )
 download.metadata["calendar_validation"]["status"]  # complete, coverage_uncertain or incomplete
+download.sessions["XNYS"]  # completed XNYS sessions, ready for prepare_market_data
 ```
 
 Each asset is compared only with its own calendar, so a date every asset lacks is

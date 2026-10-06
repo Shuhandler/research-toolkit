@@ -24,7 +24,12 @@ features.diagnostics
 ```
 
 Inputs are exact-schema eager Polars tables. `sessions` has the existing
-`session: Date`, `close_at: Datetime("us", "UTC")` contract. `observations` has
+`session: Date`, `close_at: Datetime("us", "UTC")` contract.
+Take `available_at`, label and signal timestamps from that table's `close_at`, not from
+a fixed clock time: real exchange closes move in UTC with daylight saving and early
+closes (for example 21:00 UTC in winter and 20:00 UTC in summer for `XNYS`), and a
+timestamp after the session's actual close is correctly rejected. The examples' fixed
+21:00 UTC closes belong to their synthetic calendars only. `observations` has
 `session: Date`, `asset: String`, `available_at: Datetime("us", "UTC")` and one
 Float64 column for every requested feature. Source values must be finite and
 nonnull; the complete asset-by-calendar panel is required. Source observations

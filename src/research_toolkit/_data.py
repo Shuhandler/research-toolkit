@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,8 +12,9 @@ import polars as pl
 from ._results import MarketData
 
 
+UTC = pl.Datetime("us", "UTC")
 PRICE_SCHEMA = {"session": pl.Date, "asset": pl.String, "close": pl.Float64}
-SESSION_SCHEMA = {"session": pl.Date, "close_at": pl.Datetime("us", "UTC")}
+SESSION_SCHEMA = {"session": pl.Date, "close_at": UTC}
 SPLIT_SCHEMA = {
     "action_id": pl.String, "asset": pl.String,
     "effective_session": pl.Date, "ratio": pl.Float64,
@@ -42,6 +43,16 @@ def _table(frame, schema, name, keys, *, nonempty=False):
         if dtype == pl.String and frame[col].str.strip_chars().eq("").any():
             raise ValueError(f"{name}.{col} must not be blank")
     return frame.select(list(schema)).clone()
+
+
+def _local_midnight_utc(day, zone):
+    """UTC instant of 00:00 local time on ``day`` in ``zone`` (a ZoneInfo or IANA name).
+
+    The single information cutoff used for rates, borrow fees and liquidity inputs
+    that must be known before a calendar date or decision session begins.
+    """
+    zone = ZoneInfo(zone) if isinstance(zone, str) else zone
+    return datetime.combine(day, time.min, tzinfo=zone).astimezone(timezone.utc)
 
 
 def _iso_date(value, name):

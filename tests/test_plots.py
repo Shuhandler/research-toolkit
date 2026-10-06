@@ -2,7 +2,6 @@ import subprocess
 import sys
 
 import pytest
-import polars as pl
 
 import research_toolkit as rt
 from test_metrics import KW

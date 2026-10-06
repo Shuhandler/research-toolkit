@@ -27,13 +27,14 @@ complete examples.
 | `rt.cumulative_returns(...)` | Calculates summed returns, compounded returns, or wealth multiples. |
 | `rt.save_snapshot(...)` | Saves validated market inputs locally for repeatable research. |
 | `rt.load_snapshot(...)` | Loads a saved snapshot and checks its integrity. |
-| `rt.adapters.yahoo_chart(...)` | Converts supplied Yahoo chart responses into market data and an audit of the conversion. No downloads. |
-| `rt.adapters.download_yahoo(...)` | Downloads daily Yahoo Close, Adj Close, and volume for an inclusive date range, with retries, timeouts, and retrieval details. The only function that uses the network. Optional exchange calendars detect missing sessions. |
+| `rt.adapters.yahoo_chart(...)` | Converts saved Yahoo chart responses, or a `download_yahoo` result, into market data and an audit of the conversion. No downloads. |
+| `rt.adapters.download_yahoo(...)` | Downloads daily Yahoo Close, Adj Close, and volume for an inclusive date range, with retries, timeouts, and retrieval details. The only function that uses the network. Optional exchange calendars detect missing sessions and return each calendar's completed sessions. |
 | `rt.trading_calendar(...)` | Builds explicit exchange trading sessions, or a declared union/intersection of exchanges, for calendar validation (optional `calendar` extra). |
 
 The Yahoo adapter requires explicit price-adjustment information, calendars, and
 dividend payment dates where applicable. It does not assume that a provider's
-“Close” is a raw execution price.
+“Close” is a raw execution price. A download keeps its decoded responses, so
+`yahoo_chart(download, ...)` can rebuild raw prices for a backtest from it.
 
 ### Allocation and backtesting
 
@@ -124,7 +125,9 @@ it is a research model, not an exact broker loan contract.
 ## Plots
 
 All plotting functions return Matplotlib `(fig, ax)` objects. They do not show or
-save figures automatically, and they do not rerun calculations.
+save figures automatically, and they do not rerun calculations. The allocation,
+attribution and exposure views need a backtest report; they raise a clear error for
+a `series_performance` report, which has no ledger.
 
 | Function | What it plots |
 | --- | --- |

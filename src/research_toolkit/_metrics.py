@@ -8,19 +8,14 @@ from statistics import mean, stdev
 import polars as pl
 
 from ._data import _table
+from ._portfolio import _finite_above
 from ._results import BacktestResult, PerformanceResult, CorrelationResult
 from ._returns import cumulative_returns
-from ._risk_free import _risk_free, _aligned_returns
+from ._risk_free import RETURN_SCHEMA, _risk_free, _aligned_returns
 
-BENCHMARK_SCHEMA = {"period_start": pl.Date, "session": pl.Date, "simple_return": pl.Float64}
+BENCHMARK_SCHEMA = RETURN_SCHEMA
 METRIC_SCHEMA = {"metric": pl.String, "value": pl.Float64, "unit": pl.String,
                  "n_obs": pl.Int64, "status": pl.String}
-
-
-def _number(value, name, *, lower):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= lower:
-        raise ValueError(f"{name} must be finite and greater than {lower}")
-    return float(value)
 
 
 def _pair(x, y):
@@ -54,7 +49,7 @@ def _validated_run(result, allow_partial):
     _table(daily.select(list(required)), required, "daily", ["session"], nonempty=True)
     if meta.get("frequency") != "1d" or meta.get("return_basis") != "net_equity":
         raise ValueError("performance requires daily net-equity returns")
-    capital = _number(meta.get("initial_capital"), "initial_capital", lower=0)
+    capital = _finite_above(meta.get("initial_capital"), "initial_capital", lower=0)
     start, end = meta["entry_session"], meta["actual_end_session"]
     if (daily["period_start"][0].isoformat() != start or daily["session"][-1].isoformat() != end
             or meta.get("status") != result.status
@@ -204,12 +199,12 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
     portfolio volatility by default; excess_returns explicitly changes its denominator.
     """
     daily, vals, meta = _validated_run(result, allow_partial)
-    a = _number(periods_per_year, "periods_per_year", lower=0)
+    a = _finite_above(periods_per_year, "periods_per_year", lower=0)
     rf = risk_free_annual_effective
     rf_table, rf_meta, rf_period = _risk_free(daily, meta["currency"], rf, risk_free_returns, risk_free_metadata, a)
     if sharpe_denominator not in {"portfolio_returns", "excess_returns"}:
         raise ValueError("sharpe_denominator must be portfolio_returns or excess_returns")
-    mar = _number(minimum_acceptable_return_annual_effective, "minimum_acceptable_return_annual_effective", lower=-1)
+    mar = _finite_above(minimum_acceptable_return_annual_effective, "minimum_acceptable_return_annual_effective", lower=-1)
     if alignment != "strict":
         raise ValueError("only alignment='strict' is supported")
     try:

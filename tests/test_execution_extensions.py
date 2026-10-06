@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 import research_toolkit as rt
 from test_allocation import panel, OPTIONS
-from test_rebalancing import reconcile, scheduled  # synthetic shared accounting fixture
+from test_rebalancing import reconcile
 
 
 def model(assets=("A",), *, sigma=.1, adv=100., coefficient=1., commission=0., spread=0., per_share=0.):

@@ -1,34 +1,10 @@
-from datetime import date, timedelta
+from datetime import date
 import math
 
 import polars as pl
 import pytest
 
 import research_toolkit as rt
-from research_toolkit._rebalancing import TARGET_SCHEMA
-
-
-@pytest.fixture
-def scheduled(inputs):
-    def simulate(series=None, baskets=None, *, costs=None, leverage=1., dividends=(), splits=(),
-                 receivable_policy="reserve", maximum=1., borrowing_rate=0., cash_rate=0., threshold=.25):
-        series = series or {"A": [100., 100., 120., 120., 132.], "B": [100., 100., 100., 100., 100.]}
-        dates = [date(2024, 1, 2)+timedelta(days=i) for i in range(len(next(iter(series.values()))))]
-        market = rt.prepare_market_data(**inputs(series=series, dates=dates, splits=splits, dividends=dividends))
-        assets = sorted(series)
-        if baskets is None:
-            baskets = [(1, {a: 1/len(assets) for a in assets}, leverage),
-                       (2, {a: 1/len(assets) for a in assets}, leverage)]
-        targets = pl.DataFrame([(dates[i-1], dates[i], a, float(weights[a]), float(l))
-            for i, weights, l in baskets for a in assets], schema=TARGET_SCHEMA, orient="row")
-        kwargs = dict(targets=targets, initial_capital=100., entry_session=dates[1], end_session=dates[-1],
-            policy=rt.RebalancePolicy(execution="scheduled_close", sizing="post_cost_equity", fractional_shares=True,
-                terminal_action="mark_only", non_session="raise", receivable_policy=receivable_policy,
-                max_asset_weight=maximum), costs=costs or rt.TradeCosts(commission_bps=0., half_spread_bps=0., impact_bps=0.),
-            financing=rt.Financing(cash_rate=cash_rate, borrowing_rate=borrowing_rate, day_count="ACT/365F",
-                maintenance_equity_ratio=threshold, on_breach="stop", cash_sweep="repay_debt"))
-        return rt.scheduled_rebalance(market, **kwargs), market, kwargs
-    return simulate
 
 
 def reconcile(result):

@@ -221,8 +221,16 @@ def test_fixed_dollar_notebook_offline(monkeypatch):
     import json
     from pathlib import Path
     import sys
+    import types
     matplotlib = pytest.importorskip("matplotlib")
-    pytest.importorskip("IPython")
+    # The notebook imports IPython's display(); a stub keeps this test in the [test,plot] extras.
+    shown = []
+    display_module = types.ModuleType("IPython.display")
+    display_module.display = shown.append
+    ipython = types.ModuleType("IPython")
+    ipython.display = display_module
+    monkeypatch.setitem(sys.modules, "IPython", ipython)
+    monkeypatch.setitem(sys.modules, "IPython.display", display_module)
     monkeypatch.setattr(sys, "path", sys.path.copy())
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -236,6 +244,7 @@ def test_fixed_dollar_notebook_offline(monkeypatch):
         assert r.cost_model_selections["model_id"].n_unique() == 3
         assert namespace["gross"]["executed_gross"].to_list() == pytest.approx([2_000_000]*3)
         assert r.execution_costs["total_cost"].sum() == pytest.approx(r.trades["trade_cost"].sum())
+        assert len(shown) >= 2 and all(isinstance(item, matplotlib.figure.Figure) for item in shown[-2:])
     finally:
         plt.close("all")
 

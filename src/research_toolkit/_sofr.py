@@ -3,13 +3,13 @@
 from bisect import bisect_right
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta
 import json
 from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from ._data import _identity, _iso_date, _table
+from ._data import _identity, _iso_date, _local_midnight_utc, _table
 from ._financing import Financing
 from ._portfolio import _number
 
@@ -123,7 +123,7 @@ def _sofr_plan(financing, entry, end, currency):
     plan = {}
     day = first
     while day <= end:
-        cutoff = datetime.combine(day, time.min, tzinfo=_NY).astimezone(timezone.utc)
+        cutoff = _local_midnight_utc(day, _NY)
         i = bisect_right(available, cutoff)-1
         if i < 0:
             raise ValueError(f"no SOFR rate available at accrual start on {day}; supply earlier observations")

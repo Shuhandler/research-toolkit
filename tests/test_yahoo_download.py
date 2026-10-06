@@ -10,9 +10,8 @@ import urllib.request
 import pytest
 
 import research_toolkit as rt
-from research_toolkit import adapters
 
-RETRIEVED = datetime(2024, 6, 10, 12, tzinfo=timezone.utc)
+RETRIEVED = datetime(2024, 6, 10, 12, tzinfo=timezone.utc)  # Same as conftest's provider fixture.
 
 
 def stamp(*args):
@@ -35,31 +34,6 @@ NY = chart("AAA", "America/New_York",
 # Tokyo bars stamped 15:00 UTC are the NEXT local day (00:00 JST).
 TOKYO = chart("BBB.T", "Asia/Tokyo", [stamp(2024, 6, 2, 15), stamp(2024, 6, 3, 15), stamp(2024, 6, 6, 15)],
               [3000., 3100., 3200.], [2900., 3000., 3100.], [10, 20, 30], currency="JPY")
-
-
-class Response(io.BytesIO):
-    def __enter__(self): return self
-    def __exit__(self, *exc): return False
-
-
-@pytest.fixture
-def provider(monkeypatch):
-    calls, sleeps = [], []
-    script = {}
-
-    def urlopen(request, timeout):
-        url = request.full_url
-        calls.append((url, timeout, request.get_header("User-agent")))
-        symbol = urllib.parse.unquote(urllib.parse.urlparse(url).path.rsplit("/", 1)[1])
-        outcome = script[symbol].pop(0) if isinstance(script[symbol], list) else script[symbol]
-        if isinstance(outcome, Exception):
-            raise outcome
-        return Response(json.dumps(outcome).encode())
-
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr("time.sleep", sleeps.append)
-    monkeypatch.setattr(adapters, "_now", lambda: RETRIEVED)
-    return script, calls, sleeps
 
 
 def test_inclusive_exchange_local_sessions_and_columns(provider):
@@ -153,3 +127,35 @@ def test_invalid_requests_raise_before_network(provider, kwargs):
 def test_import_does_not_load_network_client():
     subprocess.run([sys.executable, "-c", "import research_toolkit, sys; "
                     "assert not {'urllib.request', 'http.client'} & set(sys.modules)"], check=True)
+
+
+def test_rows_follow_request_order_and_payloads_are_retained(provider):
+    script, _, _ = provider
+    script.update({"AAA": NY, "BBB.T": TOKYO})
+    result = rt.adapters.download_yahoo(["BBB.T", "AAA"], start=date(2024, 6, 3), end=date(2024, 6, 7))
+    assert result.values["asset"].unique(maintain_order=True).to_list() == ["BBB.T", "AAA"]
+    assert result.values.filter(result.values["asset"] == "AAA")["session"].is_sorted()
+    # Decoded payloads are kept as reported (padding bars included) for yahoo_chart.
+    assert result.responses == {"AAA": NY, "BBB.T": TOKYO}
+    assert result.sessions == {}  # No calendar, so no validated session tables.
+
+
+def test_bar_retrieved_before_its_session_ended_is_flagged(provider):
+    script, _, _ = provider
+    payload = json.loads(json.dumps(NY))
+    payload["chart"]["result"][0]["meta"]["currentTradingPeriod"] = {"regular": {"end": stamp(2024, 6, 10, 20)}}
+    script["AAA"] = payload  # Retrieval is 12:00 UTC on 10 June, before that day's 20:00 UTC close.
+    result = rt.adapters.download_yahoo(["AAA"], start=date(2024, 6, 3), end=date(2024, 6, 10))
+    flagged = result.diagnostics.filter(result.diagnostics["code"] == "session_open_at_retrieval")
+    assert flagged.select("asset", "session").rows() == [("AAA", date(2024, 6, 10))]
+
+
+def test_http_errors_are_closed_after_retry_or_failure(provider):
+    script, _, _ = provider
+    busy, missing = io.BytesIO(), io.BytesIO(b'{"chart":{"error":"No data found"}}')
+    script["AAA"] = [urllib.error.HTTPError("u", 503, "busy", {}, busy), NY]
+    rt.adapters.download_yahoo(["AAA"], start=date(2024, 6, 3), end=date(2024, 6, 7), backoff_seconds=0)
+    script["BAD"] = urllib.error.HTTPError("u", 404, "missing", {}, missing)
+    with pytest.raises(ValueError, match="HTTP 404"):
+        rt.adapters.download_yahoo(["BAD"], start=date(2024, 6, 3), end=date(2024, 6, 7))
+    assert busy.closed and missing.closed

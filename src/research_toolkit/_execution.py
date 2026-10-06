@@ -2,15 +2,14 @@
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime
 import math
 import json
 from statistics import mean, stdev
-from zoneinfo import ZoneInfo
 
 import polars as pl
 
-from ._data import _table, _identity
+from ._data import _local_midnight_utc, _table, _identity
 from ._portfolio import _number, _weights
 from ._results import LiquidityResult, ExecutionResult
 
@@ -30,6 +29,8 @@ def estimate_liquidity(returns, dollar_volume, *, decision_session, lookback, me
     """
     from ._allocation import _window
     series, meta = _window(returns, decision_session, lookback, 1.)
+    # Liquidity uses daily units; the window helper's annualization argument does not apply.
+    del meta["periods_per_year"]
     schema = {"session": pl.Date, "asset": pl.String, "dollar_volume": pl.Float64,
               "available_at": pl.Datetime("us", "UTC")}
     volumes = _table(dollar_volume, schema, "dollar_volume", ["session", "asset"], nonempty=True)
@@ -44,7 +45,7 @@ def estimate_liquidity(returns, dollar_volume, *, decision_session, lookback, me
     expected = {(d, a) for d in dates for a in series}
     if set(selected.select("session", "asset").iter_rows()) != expected:
         raise ValueError("dollar volumes must match the complete return window and asset universe")
-    cutoff = datetime.combine(decision_session, time.min, tzinfo=ZoneInfo(source["timezone"])).astimezone(timezone.utc)
+    cutoff = _local_midnight_utc(decision_session, source["timezone"])
     if any(t > cutoff for t in selected["available_at"]):
         raise ValueError("liquidity input was unavailable before the decision")
     rows = [(a, stdev(series[a]), mean(selected.filter(pl.col("asset") == a)["dollar_volume"]), lookback) for a in sorted(series)]

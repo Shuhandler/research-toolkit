@@ -258,8 +258,11 @@ annualization, return basis, RF series, benchmark or metric conventions. Cost,
 leverage and financing differences are scenario inputs, retained in metadata.
 Explicit `coverage="separate"` and/or `assumptions="separate"` retain each
 scenario's own sample and conventions, with difference diagnostics; nothing is
-intersected, resampled or recomputed. Different dated RF/benchmark rows also
-require separate assumptions handling even if they result from unequal coverage.
+intersected, resampled or recomputed. Risk-free and benchmark rows are keyed by
+holding interval, so unequal coverage changes them even when the scalar rate, dated
+source or benchmark convention is identical. Unequal coverage therefore needs both
+`coverage="separate"` and `assumptions="separate"`; the error names coverage as the
+cause rather than reporting an incompatible risk-free rule.
 When separate handling is selected, differing benchmark summaries are qualified
 by scenario. A stopped report additionally requires `allow_partial=True` in both
 `performance` and the comparison. Partial observations never masquerade as the
@@ -278,7 +281,10 @@ market = converted.market
 
 `saved_responses` maps caller asset identifiers to decoded, saved Yahoo chart JSON
 objects (`chart.result[0]`, daily timestamps, `indicators.quote`, optional
-`indicators.adjclose`, and `events`). No files are downloaded or opened implicitly.
+`indicators.adjclose`, and `events`), or is a `ProviderDownloadResult` from
+`download_yahoo`. A download's retained payloads are first limited to its inclusive
+requested sessions, bars and events alike; see [the download contract](api.md#adaptersdownload_yahoo).
+No files are downloaded or opened implicitly.
 Only one successful daily result per asset, one currency/timezone and the exact
 supplied calendar are supported. Extra/missing/duplicate sessions, null selected
 prices, unsupported events, malformed arrays or mismatched provider metadata raise.
