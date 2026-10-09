@@ -5,7 +5,8 @@ entry costs, splits, dividends, cash/borrowing interest, debt repayment, and mar
 stops, performance ratios, benchmark comparisons, scheduled targets, allocation
 and risk estimates below. Capped allocation, nonlinear square-root costs and
 dated risk-free reporting are also implemented, as are CAGR/Calmar/higher-moment
-diagnostics, factor regressions and cross-sectional signal diagnostics. Drawdown
+diagnostics, factor regressions and cross-sectional signal diagnostics, as are
+two-strategy information-ratio weights and analytical strategy combinations. Drawdown
 durations and advanced allocation remain proposed. See [the API](api.md) for the exact supported subset. User-confirmed
 scope is recorded in [project context](project-context.md); numerical examples here
 are independent test oracles, not market-data backtest outputs.
@@ -718,3 +719,44 @@ schedules; signal-instruction helpers still require next-session-close execution
 - Quantile returns are equal-weight means of supplied simple forward returns. Group
   ties are broken by asset identifier or the date is rejected, separately from the
   average-rank IC rule. Spreads are analytical, not executable portfolio returns.
+
+## Two-strategy information-ratio allocation and analytical combination
+
+- Inputs are periodic simple returns on net equity of two existing strategies.
+  Log returns are never converted silently, and dollar P&L from differently sized
+  accounts is never pooled; source capital is provenance only.
+- Strategies and the common benchmark match on both holding-interval endpoints
+  inside an explicitly declared window. Nothing is intersected, forward-filled or
+  truncated; rows outside the declared window are counted, and an interval crossing
+  its boundary raises.
+- Active return `a_i,t = r_i,t - b_t`. Objective
+  `IR(w) = sqrt(A) * w'mean(a) / sqrt(w' Sigma w)` with `ddof=1` sample covariance and
+  explicit `A`. Weights are nonnegative, sum to one and respect explicit per-strategy
+  bounds; infeasible bounds raise. The benchmark is subtracted once from the
+  combined return because weights sum to one; a zero benchmark makes active returns
+  equal strategy returns.
+- `zero_correlation` keeps active variances and sets the covariance to zero. It is a
+  counterfactual assumption about the objective's series (active returns, not
+  necessarily raw returns). Weights chosen under it are also evaluated under the
+  empirical covariance, i.e. on the observed combined returns, and both values are
+  reported separately.
+- The maximum is global over the feasible interval: endpoints plus the single
+  interior stationary point of the linear first-order condition. IR itself is
+  maximized, never squared or absolute IR, so negative means are handled correctly.
+  Ties choose the smallest weight on the alphabetically first strategy.
+- Zero tracking error (relative threshold `1e-9` of `w1*vol1 + w2*vol2`) at a
+  feasible weight with positive mean active return makes IR unbounded; zero
+  tracking error everywhere leaves it undefined. Both return null weights with a
+  status. Undefined IR is never zero and no shrinkage or regularization is added.
+  Near-singular covariances are flagged but remain valid finite estimates.
+- A combination applies fixed weights every period: a periodically rebalanced
+  allocation between already-costed strategy sleeves, not drifting buy-and-hold
+  sleeves. No reallocation costs, netting, shared collateral or financing offsets
+  are modeled, and scaled returns do not recompute impact or borrowing, so fixed
+  dollar targets and nonlinear costs may not scale proportionally. It is not an
+  executable combined-account backtest. Illustrative equity is labeled as such.
+- Fitted weights are applied to an evaluation window without re-estimation. A
+  window equal to the estimation sample is labeled in-sample; partial overlap is
+  rejected unless explicitly identified; earlier windows raise. Later windows are
+  never claimed out-of-sample, since prior inspection cannot be detected.
+

@@ -80,6 +80,8 @@ long/short basket with a hedge and updated liquidity estimates.
 | `rt.rolling_risk(...)` | Calculates rolling volatility and Sharpe ratios, plus beta and correlation when a benchmark is supplied. |
 | `rt.risk_free_returns(...)` | Converts dated annual rate observations into holding-period risk-free returns using explicit day-count and compounding rules. |
 | `rt.compare_performance(...)` | Combines scenario reports into a numerical comparison table, with checks for compatible assumptions and coverage. |
+| `rt.information_ratio_weights(...)` | Chooses long-only weights for two existing strategies that maximize the combined information ratio within explicit bounds, using estimated or assumed-zero correlation. |
+| `rt.combine_strategies(...)` | Combines two strategy return series with fixed weights into an analytical (rebalanced-sleeve) return series, with contributions and optional illustrative equity. |
 
 Reporting accepts either a constant risk-free rate or dated risk-free returns.
 The risk-free benchmark is separate from borrowing costs and cash interest.
@@ -87,6 +89,8 @@ Summed simple returns, compounded returns, and wealth multiples are kept distinc
 Stopped runs require explicit partial reporting and retain their stop status.
 Factor regressions and signal diagnostics are descriptive: they match intervals
 exactly, report undefined cases with a status, and make no predictive claims.
+Strategy combinations weight already-costed returns; they are not an executable
+combined account, and an evaluation window is never claimed to be out-of-sample.
 
 ### Research workflows
 

@@ -24,6 +24,8 @@ from ._series import series_performance
 from ._diagnostics import performance_diagnostics
 from ._factors import factor_regression
 from ._signal_diagnostics import signal_diagnostics
+from ._strategy_mix import information_ratio_weights, combine_strategies
+from ._results import StrategyAllocationResult, StrategyCombinationResult
 from ._calendars import trading_calendar
 from ._risk_free import risk_free_returns
 from ._comparison import compare_performance
@@ -41,7 +43,8 @@ __all__ = [
     "LiquidityResult", "ExecutionResult", "ProviderDataResult", "ProviderDownloadResult",
     "series_performance", "tail_risk",
     "performance_diagnostics", "factor_regression", "signal_diagnostics",
-    "PerformanceDiagnostics", "FactorRegressionResult", "SignalDiagnosticsResult", "trading_calendar", "TradingCalendar",
+    "PerformanceDiagnostics", "FactorRegressionResult", "SignalDiagnosticsResult",
+    "information_ratio_weights", "combine_strategies", "StrategyAllocationResult", "StrategyCombinationResult", "trading_calendar", "TradingCalendar",
     "SOFRFinancing",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",

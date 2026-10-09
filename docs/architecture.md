@@ -18,6 +18,7 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_execution.py` | Daily liquidity estimates, square-root costs and entry/scheduled nonlinear sizing | Notebook extension |
 | `_risk_free.py` | Explicit dated risk-free alignment and calendar-day conversion | Notebook extension |
 | `_comparison.py` | Prepared numerical scenario tables and mismatch diagnostics | Notebook extension |
+| `_strategy_mix.py` | Two-strategy information-ratio weights and analytical fixed-weight combinations | Implemented extension |
 | `adapters.py` | Offline Yahoo chart conversion with explicit adjustment/availability contracts | Notebook extension |
 | `_costs.py` | Trade-level commissions/spread assumptions | 1B |
 | `_dividends.py` | Explicit payment-funded reinvestment policy; execution stays in the shared ledger | Post-M2 |
@@ -383,3 +384,16 @@ summary tables after reconciling them; `factor_regression` reuses the strict
 interval and risk-free alignment helpers; `signal_diagnostics` reuses the shared
 schema validation. They return `PerformanceDiagnostics`, `FactorRegressionResult`
 and `SignalDiagnosticsResult`, and import no plotting, provider or ML library.
+
+## Two-strategy allocation and combination — implemented
+
+`_strategy_mix.py` is a calculation-only module. It reuses the shared schema,
+interval-contiguity and strict benchmark-alignment helpers, accepts either
+`PerformanceResult` objects or declared return tables, and returns
+`StrategyAllocationResult` and `StrategyCombinationResult`. It imports no plotting,
+provider or ML library and never calls the ledger. Combination reports are produced
+by the existing `series_performance`, so metrics are not duplicated. Possible
+future extensions (not implemented): more than two strategies with a general
+constrained optimizer, walk-forward re-estimation, and drifting-sleeve or
+cost-aware sleeve rebalancing.
+

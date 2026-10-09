@@ -23,6 +23,9 @@ extensions in [architecture](architecture.md) are labeled separately.
 Report diagnostics (`performance_diagnostics`), factor regressions
 (`factor_regression`) and cross-sectional signal evaluation (`signal_diagnostics`)
 are documented [below](#performance-diagnostics-factor-regression-and-signal-evaluation).
+Two-strategy information-ratio weights (`information_ratio_weights`) and analytical
+fixed-weight combinations (`combine_strategies`) are documented in
+[their own section](#two-strategy-allocation-and-analytical-combination).
 
 Signed positions are supported through `buy_and_hold` and `scheduled_rebalance`
 with `LongShortPolicy` and `StockBorrow`. See [long/short contracts and notebook
@@ -1382,3 +1385,169 @@ Statuses: `insufficient_assets` (fewer than two assets), `constant_signal`,
 `constant_outcome` (IC); `insufficient_assets_for_quantiles` (fewer than Q
 assets), `constant_signal`, `tie_at_group_boundary` (groups and spreads);
 `no_evaluated_dates` and `insufficient_dates` (summaries).
+
+## Two-strategy allocation and analytical combination
+
+These functions work at the strategy level, on periodic **simple net-equity
+returns** of two strategies that have already been run and costed. They never pool
+dollar P&L, never merge positions and never rerun a backtest. No network calls,
+file writes, plots or commentary. A runnable synthetic walk-through is
+[`examples/strategy_allocation.py`](../examples/strategy_allocation.py).
+
+### Strategy inputs
+
+`strategies` maps **exactly two** nonblank names to either a `PerformanceResult`
+(its `daily.simple_return`; stopped runs need `allow_partial=True`) or a
+`period_start, session, simple_return` table (Date, Date, Float64). Every table
+needs an entry in `strategy_metadata` with nonblank `source`, `currency`,
+`frequency`, `return_basis="net_equity"` and `return_method="simple"`; log or other
+returns raise rather than being converted. Currencies and frequencies must agree
+(and match a supplied benchmark). Different original account sizes are allowed:
+a report's `initial_capital` is recorded as provenance and never used. Strategies
+are ordered by name; the alphabetically first is the "first strategy".
+
+Each call declares an inclusive window `(first_period_start, last_session)` of
+`datetime.date`s. Inside it, each series must have an interval starting at the
+first date and one ending at the last, with contiguous intervals between. Rows
+outside the window are excluded and counted in `metadata["rows_outside_window"]`;
+an interval crossing a window boundary raises. Within the window both strategies
+(and the benchmark) must match on **both** interval endpoints; missing, extra,
+duplicate, null or nonfinite rows raise. Nothing is intersected, filled or dropped.
+
+### `information_ratio_weights`
+
+```python
+fit = rt.information_ratio_weights(
+    {"trend": trend_report, "carry": carry_report},      # or return tables + strategy_metadata
+    benchmark="zero",                                     # or a return table + benchmark_metadata
+    periods_per_year=252,
+    bounds={"trend": (0.10, 0.90), "carry": (0.10, 0.90)},
+    estimation_window=(date(2024, 1, 1), date(2024, 12, 31)),
+    covariance="estimated",                               # or "zero_correlation"
+)
+fit.weights             # strategy, weight, lower_bound, upper_bound, at_lower_bound, at_upper_bound, status
+fit.estimates           # per strategy: raw and active means/volatilities, standalone IR and status
+fit.covariance          # empirical vs optimization covariance (annualized) and correlations, raw-return correlation
+fit.summary             # basis, metric, value, unit, n_obs, status
+fit.risk_contributions  # basis, strategy, weight, variance_contribution, fraction_of_variance, status
+fit.candidates          # every evaluated weight, its IR and status, and which was selected
+fit.returns             # estimation sample: strategy, simple_return, benchmark_return, active_return
+```
+
+All arguments except the metadata/partial options are required. `benchmark` is
+`"zero"` or a strictly aligned return table with `benchmark_metadata` (`source`,
+`basis`, `currency`, `frequency`). Active returns are `a_i,t = r_i,t - b_t`; with
+the zero benchmark they equal strategy returns. Weights are nonnegative and sum to
+one; each `bounds` pair must satisfy `0 <= lower <= upper <= 1`, and the implied
+interval for the first strategy, `[max(l1, 1-u2), min(u1, 1-l2)]`, must be
+nonempty or the call raises. There is no strategy-level shorting, leverage or cash.
+
+The objective is
+
+```
+IR(w) = sqrt(periods_per_year) * (w' mean(a)) / sqrt(w' Sigma w)
+```
+
+with sample means and `ddof=1` covariance of active returns. Because weights sum
+to one, the common benchmark is subtracted once from the combined return.
+`covariance="estimated"` uses the sample covariance; `"zero_correlation"` keeps
+each active variance and sets the off-diagonal term to zero. That is a
+counterfactual assumption about the series in the objective; with a nonzero
+benchmark it concerns active returns, not necessarily raw strategy returns.
+
+The global maximum over the feasible interval is found exactly. The first-order
+condition of `IR(w)` is linear in `w`, so there is at most one interior stationary
+point (the normalized `Sigma^-1 mean(a)` tangency when it is feasible). Candidates
+are both feasible ends, that point, and the minimum-tracking-error point; the
+largest finite IR wins. This handles positive, mixed and all-negative means: the
+stationary point can be a minimum, so neither squared nor absolute IR is used, and
+inverse volatility or `Sigma^-1 mean` are never simply normalized. No optimizer
+dependency, shrinkage or regularization is used.
+
+`summary` and `risk_contributions` report two bases. `optimization_covariance` is
+the covariance used in the objective: under `zero_correlation`, the assumed value.
+`observed_combined_returns` is computed from the observed combined active series,
+i.e. under the empirical covariance; it is the IR the selected weights actually
+had in the estimation sample. Under `estimated` the two agree. Variance
+contributions are `w_i (Sigma w)_i` (annualized); fractions divide by `w' Sigma w`
+and are null with `zero_tracking_error` when that is zero.
+
+| `metadata["status"]` | Meaning | Weights |
+| --- | --- | --- |
+| `ok` | finite optimum | selected |
+| `unbounded_information_ratio` | a feasible weight has (numerically) zero tracking error and positive mean active return, so IR has no finite maximum | null |
+| `undefined_zero_tracking_error` | every feasible weight has zero tracking error and none a positive mean | null |
+
+`metadata["optimum"]` is `unique`, `multiple_optima` (ties within relative
+`1e-12`) or `flat_objective` (every weight between the tied candidates is also
+optimal, e.g. zero mean active returns, or perfectly correlated strategies with
+equal IR). Ties select the smallest weight on the first strategy. A combination's
+tracking error is treated as zero when it is at most `1e-9` times
+`w1*vol1 + w2*vol2`; such a candidate is excluded (if its mean is nonpositive) or
+makes IR unbounded (if positive). `metadata["covariance_status"]` labels the
+optimization matrix `ok`, `near_singular` (`1 - rho^2 <= 1e-8`) or `singular`
+(`<= 1e-14` or a zero variance); near-singular estimates remain valid finite
+results. Undefined IR is null with a status, never zero. Fewer than two estimation
+intervals raise. Metadata also records the estimation window and every estimation
+interval, provenance, benchmark, bounds and feasible interval, tolerances,
+annualization and the objective definition.
+
+### `combine_strategies`
+
+```python
+combo = rt.combine_strategies(
+    {"trend": trend_report, "carry": carry_report},
+    weights=fit,                                   # or {"trend": 0.6, "carry": 0.4} or a strategy/weight table
+    evaluation_window=(date(2025, 1, 2), date(2025, 6, 30)),
+    benchmark="zero",                              # optional; or a return table + benchmark_metadata
+    initial_capital=1_000_000.0,                   # optional, illustrative only
+    overlap="reject",                              # or "identify"
+)
+combo.returns        # period_start, session, combined_return, benchmark_return, active_return, wealth, compounded_return
+combo.contributions  # per strategy: weight, strategy_return, return_contribution, active_return, active_contribution,
+                     # illustrative_sleeve_opening_equity, illustrative_pnl_contribution
+combo.illustrative   # period_start, session, opening_equity, pnl, equity (None without initial_capital)
+combo.benchmark      # matched benchmark returns ready for series_performance (None without a benchmark)
+```
+
+The combined return is `R_t = sum_i w_i r_i,t` with the same weights every period,
+and contributions `w_i r_i,t` sum to it (active contributions sum to the active
+return). Wealth compounds from 1 at the first `period_start`. With
+`initial_capital`, illustrative equity compounds that amount at `R_t`; each sleeve
+opens at `w_i` of the previous equity and its P&L contributions sum to the
+interval P&L. Weights must be nonnegative and sum to one; an allocation must have
+status `ok`, and its weights are applied as fitted, never re-estimated.
+
+`metadata["sample"]`: `in_sample` when the evaluation intervals equal the
+allocation's estimation intervals; `after_estimation_window` when evaluation starts
+at or after the estimation end; `overlapping_estimation_window` (with the count and
+dates) only with `overlap="identify"`, since partial overlap raises by default;
+`estimation_sample_unknown` for supplied weights. An evaluation window ending
+before the estimation window starts raises. Labels describe dates only: the
+function cannot know whether the evaluation data were inspected before the weights
+were chosen, so no out-of-sample validity is claimed.
+
+Economic convention, also in `metadata["limitations"]`: fixed weights each period
+represent a periodically rebalanced allocation between strategy sleeves, not
+buy-and-hold sleeves with drifting weights. Supplied returns keep their own
+modeled costs; no sleeve-reallocation costs, cross-strategy netting, shared
+collateral or financing offsets are modeled. Scaling a strategy's returns does not
+recalculate its market impact or borrowing economics, so strategies with fixed
+dollar targets or nonlinear costs may not scale proportionally. This is not an
+executable combined-account backtest.
+
+Metrics reuse the existing report rather than a new metric set:
+
+```python
+report = rt.series_performance(
+    combo.illustrative, initial_capital=combo.metadata["initial_capital"], periods_per_year=252,
+    risk_free_annual_effective=0.0, benchmark=combo.benchmark,
+    benchmark_metadata=combo.metadata["benchmark_metadata"],
+    metadata=combo.metadata["series_metadata"], frequency=combo.metadata["frequency"])
+```
+
+`series_metadata` carries the sample label, weights and limitations into the
+report's `source_metadata`. The report's simple returns reproduce `R_t`, and its
+`information_ratio` uses the same convention as the allocation. Reports for
+different weights can be compared with `rt.compare_performance`.
+

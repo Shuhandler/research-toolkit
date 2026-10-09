@@ -408,3 +408,43 @@ Engineering choices within that request:
   Unmatched rows need an explicit `exclusions` reason. Group ties are broken by
   asset identifier or the date is rejected. In `extremes` grouping the middle assets
   form the interior groups (unassigned when Q=2).
+
+## Two-strategy information-ratio allocation and combination — user request
+
+User-requested: general-purpose functions to compare and choose allocations
+between two existing strategies by maximizing the combined information ratio
+under explicit weight bounds, comparing an assumed zero-correlation allocation
+with an estimated-correlation one, and inspecting the analytical combined series
+and contributions; no assignment-specific dates, tickers, capital or investor
+assumptions, and no engine changes. User-specified conventions: simple net-equity
+returns only, no pooled dollar P&L; explicit annualization, benchmark (zero or a
+supplied series), bounds, window and covariance mode; strict two-endpoint matching;
+`ddof=1`; long-only weights summing to one; global optimum including endpoints;
+no squared/absolute IR or normalized heuristics; undefined IR never zero; no
+shrinkage; zero-correlation weights also evaluated empirically; fixed-weight
+rebalanced-sleeve combination with recorded limitations; in-sample labeling and
+overlap handling without out-of-sample claims; no walk-forward, many-strategy
+optimizer, execution engine or notebook utilities.
+
+Engineering choices within that request:
+
+- Names `information_ratio_weights` and `combine_strategies`, with
+  `StrategyAllocationResult` and `StrategyCombinationResult`. Windows are an
+  inclusive `(first_period_start, last_session)` tuple; rows outside are counted,
+  crossing intervals raise. Table inputs declare `return_basis="net_equity"` and
+  `return_method="simple"`.
+- Closed-form two-strategy search: the IR first-order condition is linear, so the
+  candidates are the feasible ends, the one stationary point and the
+  minimum-tracking-error point. Pure Python; Polars remains the only dependency.
+- Tolerances (recorded in metadata): weight `1e-12`; zero tracking error when at
+  most `1e-9` of `w1*vol1 + w2*vol2`; ties within relative `1e-12`, resolved to the
+  smallest weight on the alphabetically first strategy; covariance labeled
+  `near_singular`/`singular` at `1 - rho^2` of `1e-8`/`1e-14` (diagnostic only).
+- An evaluation window that precedes estimation raises; partial overlap raises
+  unless `overlap="identify"`. Combination metrics reuse `series_performance` via
+  the illustrative P&L table and a ready benchmark table/metadata rather than a new
+  metric set.
+- Deferred, not implemented: more than two strategies, walk-forward re-estimation,
+  automatic rebalancing schedules, drifting-sleeve combinations, sleeve
+  reallocation costs and covariance shrinkage.
+

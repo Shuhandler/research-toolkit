@@ -273,3 +273,34 @@ class SignalDiagnosticsResult:
     coverage: pl.DataFrame
     exclusions: pl.DataFrame
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StrategyAllocationResult:
+    """Two-strategy information-ratio weights, the estimates behind them and every candidate.
+
+    ``summary`` and ``risk_contributions`` separate the covariance used in the
+    objective from the observed combined returns. Null weights carry a status.
+    """
+    weights: pl.DataFrame
+    estimates: pl.DataFrame
+    covariance: pl.DataFrame
+    summary: pl.DataFrame
+    risk_contributions: pl.DataFrame
+    candidates: pl.DataFrame
+    returns: pl.DataFrame
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class StrategyCombinationResult:
+    """Fixed-weight analytical combination of strategy returns; not an executable account.
+
+    ``illustrative`` and ``benchmark`` are None unless initial capital or a
+    benchmark was supplied.
+    """
+    returns: pl.DataFrame
+    contributions: pl.DataFrame
+    illustrative: pl.DataFrame | None
+    benchmark: pl.DataFrame | None
+    metadata: dict[str, Any]

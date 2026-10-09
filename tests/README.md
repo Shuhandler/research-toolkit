@@ -41,6 +41,13 @@ schemas, provenance, sessions, and portfolio policies.
   per-date (not pooled) means, constant/insufficient cross-sections, uneven and
   extreme groups, group tie rules, changing universes and exclusions, forward
   timing and overlapping horizons.
+- `test_strategy_mix.py`: zero-correlation interior solutions by hand, correlated
+  and near-singular cases against a grid/golden-section reference, binding and
+  infeasible bounds, mixed and all-negative means, deterministic ties and flat
+  objectives, constant series, unbounded IR, perfect correlation, active returns
+  against a varying benchmark, strict endpoint matching, differently sized source
+  accounts, contribution/compounding/illustrative-equity reconciliation, empirical
+  evaluation of zero-correlation weights, window overlap labels and the example.
 - `test_public_api.py`: every `rt.*` call named in the README and API docs exists
   and is exported; `__version__`, `__all__`, and plot views without other tests
   (risk contributions, histogram counts, split markers, ledger-only errors, guards).

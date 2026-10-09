@@ -199,3 +199,16 @@ total-return market factor and a long/short factor beside a market-only fit; and
 per-date rank ICs with equal-weight extreme-quintile returns. Import `run_example()`
 in a notebook to inspect the result objects. No downloads, files or plots; the
 numbers illustrate the interfaces only. See [the API](../docs/api.md#performance-diagnostics-factor-regression-and-signal-evaluation).
+
+## Two-strategy information-ratio allocation
+
+`python examples/strategy_allocation.py` builds two seeded synthetic strategies
+reported from accounts of different sizes, then chooses 10%–90% bounded weights
+against a zero-return benchmark under the zero-correlation assumption and under
+the estimated correlation. Each allocation prints its assumed objective beside
+the information ratio implied by the observed combined returns. Both sets of
+fitted weights are then applied, without re-estimation, to a separate later
+window and reported through `series_performance` and `compare_performance`. The
+printed limitations explain why an analytical combination of already-costed
+returns is not an executable combined account. No downloads, files or plots. See
+[the API](../docs/api.md#two-strategy-allocation-and-analytical-combination).
