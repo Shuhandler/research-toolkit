@@ -11,7 +11,9 @@ import research_toolkit as rt
 
 The toolkit currently supports daily long-only and long/short portfolios in one currency,
 including leverage, dividends, splits, trading costs, and financing. You can run
-buy-and-hold, scheduled rebalancing, or strategies driven by dated signals.
+buy-and-hold, scheduled rebalancing, or strategies driven by dated signals. Optional
+security lifecycles handle ticker changes, listings, suspensions, delistings, cash
+and stock acquisitions, spin-offs and warrants through the same ledger.
 
 ## Functions
 
@@ -30,6 +32,10 @@ complete examples.
 | `rt.adapters.yahoo_chart(...)` | Converts saved Yahoo chart responses, or a `download_yahoo` result, into market data and an audit of the conversion. No downloads. |
 | `rt.adapters.download_yahoo(...)` | Downloads daily Yahoo Close, Adj Close, and volume for an inclusive date range, with retries, timeouts, and retrieval details. The only function that uses the network. Optional exchange calendars detect missing sessions and return each calendar's completed sessions. |
 | `rt.trading_calendar(...)` | Builds explicit exchange trading sessions, or a declared union/intersection of exchanges, for calendar validation (optional `calendar` extra). |
+| `rt.corporate_action_inputs(...)` | Builds typed security-master, alias, suspension, corporate-action, warrant and valuation-mark tables from row dictionaries for `prepare_market_data`. |
+| `rt.security_status(...)` | Shows each security's dated status (listed, suspended, terminated), tradability, ticker and the actions announced by each close. |
+| `rt.security_returns(...)` | Separates a security's quoted-price return from its economic total return across distributions and acquisitions, with explicit statuses for missing inputs. |
+| `rt.adapters.resolve_aliases(...)` | Maps provider rows keyed by dated tickers to stable security identifiers. |
 
 The Yahoo adapter requires explicit price-adjustment information, calendars, and
 dividend payment dates where applicable. It does not assume that a provider's
@@ -50,7 +56,10 @@ dividend payment dates where applicable. It does not assume that a provider's
 
 Buy-and-hold lets weights drift without trading. Splits and explicitly enabled
 dividend reinvestment can change quantities. Neither simulator automatically sells
-the portfolio at the end.
+the portfolio at the end. With corporate actions, pass `corporate_actions=
+rt.CorporateActionPolicy(...)`: mergers, distributions and warrant expiry happen
+when effective, pending cash and undelivered securities are shown as claims, and
+`result.corporate_actions` audits every event. See [corporate actions](docs/corporate-actions.md).
 
 ### Trading costs and sizing
 

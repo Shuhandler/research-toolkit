@@ -76,10 +76,13 @@ including unattributed financing must sum to portfolio P&L.
 
 M1 uses fractional shares, one currency, no taxes, no settlement lag, no external
 flows, and ordinary cash dividends and splits only. These are recorded modeling
-assumptions. Reject mergers, spin-offs, special distributions, unsupported
-delistings, or other unmodeled events; do not fill through them or discard assets.
-Raw prices must be positive finite values. A zero-price default/delisting requires
-an explicit future terminal-event model, not a fabricated last price.
+assumptions. Without lifecycle inputs, mergers, spin-offs, special distributions,
+delistings and other unmodeled events remain unsupported; do not fill through them
+or discard assets. The [corporate-action extension](#security-lifecycles-and-corporate-actions)
+models cash/stock acquisitions, distributions and warrants explicitly, with dated
+settlement and delivery. Raw prices must be positive finite values. A worthless
+delisting needs an explicit terminal action (for example zero cash consideration),
+not a fabricated zero price.
 
 ## Entry, holding periods, and execution
 
@@ -760,3 +763,39 @@ schedules; signal-instruction helpers still require next-session-close execution
   rejected unless explicitly identified; earlier windows raise. Later windows are
   never claimed out-of-sample, since prior inspection cannot be detected.
 
+
+
+## Security lifecycles and corporate actions
+
+Exact schemas, event order and limitations are in the [guide](corporate-actions.md).
+
+- A security's stable identity is separate from its dated tickers. Alias changes
+  never trade, cost money or move history; aliases cannot overlap across securities.
+- Quotes are expected only while listed, unsuspended and not terminated. Missing
+  expected quotes are data errors; quotes are never filled, invented or zeroed.
+  Held positions or claims that cannot be valued stop the run at the last valued
+  close (`unvalued_position`); explicitly supplied marks are the only alternative.
+- Announcement, entitlement/effectiveness, record, delivery and cash-settlement
+  dates are distinct. Entitlement uses holdings at the start of the effective or
+  ex-date (regular way or due bill); record-date entitlement is rejected.
+- Acquisitions extinguish the source and create cash claims (face value,
+  undiscounted, no interest or credit risk) and successor-share claims, settled or
+  delivered on their own dates. Distributions keep the parent and create child
+  claims. Fractions are fractional or paid in cash at an explicit price.
+- Conversions and deliveries are not trades and carry no ordinary costs; an
+  explicit `reorganization_fee` is the only mandatory-action cost. Discretionary
+  sales and exercises are separate: sales use ordinary trading costs, exercises pay
+  the strike (and an explicit fee) from cash or the declared loan.
+- Mechanical value changes are attributed to `corporate_action` using the previous
+  close marks of the derecognized and recognized items (first available mark for a
+  newly listed security), so a value-conserving conversion creates no equity;
+  subsequent marks are ordinary market P&L.
+- Short holders owe consideration. Obligations stay collateralized at the
+  collateral multiple until settled, then settle in cash at the delivery close or
+  become an explicitly borrowed short. Borrow fees stop on the effective date.
+- Signed margin adds explicit fractions for positive claims, obligations and long
+  warrants. Long-only maintenance treats undelivered securities as risky exposure.
+- Analytical `security_returns` distinguish quoted raw returns from economic total
+  returns that include distributed securities and acquisition consideration, and
+  report missing inputs as statuses instead of values. Adjusted price series are
+  rejected for lifecycle accounting to avoid counting actions twice.

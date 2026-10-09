@@ -131,6 +131,10 @@ def allocation(report, *, ax=None):
             "account:dividend_receivable": "Dividend receivables",
             "account:restricted_collateral": "Restricted short collateral",
             "account:dividend_liability": "Dividend liabilities (negative)",
+            "account:pending_cash_receivable": "Pending action cash",
+            "account:pending_cash_payable": "Pending action cash owed (negative)",
+            "account:pending_security_receivable": "Undelivered securities",
+            "account:pending_security_obligation": "Security delivery obligations (negative)",
         }[component]
         ax.plot(rows["session"].to_list(), rows["weight"].to_list(), label=label)
     ax.legend(fontsize="small", ncol=2)
@@ -221,7 +225,7 @@ def turnover(result, *, allow_partial=False, ax=None):
     if not allow_partial:
         result.require_complete()
     _, ax = _axes(ax)
-    for phase in ("entry", "rebalance", "dividend_reinvestment"):
+    for phase in ("entry", "rebalance", "dividend_reinvestment", "corporate_action_liquidation"):
         rows = result.turnover.filter(pl.col("phase") == phase)
         if rows.height:
             ax.scatter(rows["session"].to_list(), rows["turnover"].to_list(), label=phase.replace("_", " ").capitalize())
@@ -241,6 +245,10 @@ def exposures(report, *, ax=None):
     if report.metadata.get("long_short") is not None:
         columns += [("long_exposure", "Long exposure"), ("short_exposure", "Absolute short exposure"),
                     ("restricted_collateral", "Restricted collateral"), ("dividend_liability", "Dividend liabilities")]
+    if report.metadata.get("lifecycle") is not None:
+        columns += [("pending_cash_receivable", "Pending action cash"), ("pending_cash_payable", "Action cash owed"),
+                    ("pending_security_receivable", "Undelivered securities"),
+                    ("pending_security_obligation", "Security delivery obligations")]
     for col, label in columns:
         ax.plot(report.daily["session"].to_list(), report.daily[col].to_list(), label=label)
     ax.legend(fontsize="small")

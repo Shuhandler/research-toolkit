@@ -36,7 +36,7 @@ def test_every_documented_call_exists(document):
 def test_namespaces_and_version():
     assert all(hasattr(rt, name) for name in rt.__all__)
     assert rt.plots.__all__ == PLOTS and all(callable(getattr(rt.plots, n)) for n in PLOTS)
-    assert rt.adapters.__all__ == ["yahoo_chart", "download_yahoo"]
+    assert rt.adapters.__all__ == ["yahoo_chart", "download_yahoo", "resolve_aliases"]
     # Helpers imported for internal use are not part of the public namespaces.
     assert not hasattr(rt.plots, "fill") and not hasattr(rt.adapters, "prepare_market_data")
     assert rt.__version__ == version("research-toolkit")

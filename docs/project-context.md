@@ -75,7 +75,8 @@ These are explicit, revisable design choices, not additional user confirmations:
 - **Before external distribution:** choose this project's license and verify package
   name availability. Do not assume the reference's license applies to new work.
 - **Before later phases:** broker-specific margin/liquidation, lot rules, short
-  borrowing, complex corporate actions, multi-currency/FX, additional provider/download adapters,
+  borrowing, corporate actions beyond the implemented lifecycle extension (rights,
+  tenders, elections, CVRs), multi-currency/FX, additional provider/download adapters,
   intraday execution, and interactive plotting. Do not prebuild abstractions for them.
 
 ## Status and next step
@@ -448,3 +449,52 @@ Engineering choices within that request:
   automatic rebalancing schedules, drifting-sleeve combinations, sleeve
   reallocation costs and covariance shrinkage.
 
+
+
+## Security lifecycles and corporate actions — user request
+
+User-requested: extend the existing daily engine (not a separate simulator) for
+ticker/exchange changes, cash acquisitions and delistings, stock and mixed
+acquisitions, spin-offs and security distributions, and warrant distributions,
+trading and expiry, for long and short, leveraged, financed, collateralized,
+dividend-paying and scheduled portfolios, with tests, docs and an example.
+User-specified requirements include: stable identities separate from dated aliases;
+lifecycle-aware price validation with no filling, invented prices or zeros; distinct
+announcement/entitlement/effective/delivery/settlement dates; rejection of
+record-date entitlement; exactly-once deterministic application; face-value cash
+claims with the assumption stated; no costs on mandatory conversions unless an
+explicit fee applies; collateral released only when obligations change; no
+automatic warrant exercise or sale unless selected; explicit retain/liquidate
+policy for distributed securities; stale-target rejection; unvalued holdings
+stopping as incomplete; versioned snapshots that keep old ones readable; unchanged
+numbers for existing runs.
+
+Engineering choices within that request (not additional user confirmations):
+
+- Optional `securities`, `suspensions`, `aliases`, `corporate_actions`,
+  `action_legs`, `warrants` and `valuation_marks` tables in `prepare_market_data`,
+  built with `corporate_action_inputs`. Legacy markets keep their identity and
+  snapshot format 1; lifecycle markets use format 2. Lifecycle markets require raw prices.
+- Three action types (`cash_acquisition`, `stock_acquisition`, `distribution`) with
+  per-leg cash/security consideration, fraction policy and due dates, plus explicit
+  date-dependent cash accrual. Effective dates apply at the start of the date;
+  distributions use the ex-date (regular way or due bill).
+- Pending consideration and undelivered securities are signed claims in equity;
+  cash at face value, securities at market or supplied marks. Value-conserving
+  conversions create no equity; mechanical recognition is attributed separately.
+- `CorporateActionPolicy` makes the remaining choices explicit: retain or
+  liquidate distributed securities, cash settlement at the delivery close or a
+  borrowed short for short obligations, margin fractions for claims, obligations
+  and warrants, and a reorganization fee.
+- Warrants: physical cash-funded American/European exercise via caller-supplied
+  `warrant_exercises`; lapse at zero after expiry; no short warrants.
+- Baskets trade only quoted strategy assets; retained distributed securities and
+  claims form an untraded sleeve excluded from target sizing.
+- Unvalued closes roll back to the last valued close with `stop_reason=
+  "unvalued_position"` rather than presenting a NAV.
+- `security_status` (dated eligibility and announced actions), `security_returns`
+  (quoted versus economic total returns with statuses), `adapters.resolve_aliases`
+  and sourced provider-split overrides in `yahoo_chart` support data preparation.
+  No new dependency.
+
+See [the guide](corporate-actions.md) and [the example](../examples/corporate_actions.py).

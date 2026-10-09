@@ -78,7 +78,7 @@ def _validated_run(result, allow_partial):
     expected_keys = [(daily["period_start"][0], "pre_entry"), (daily["period_start"][0], "post_entry")]
     scheduled = set(result.targets["session"].to_list()) if result.metadata.get("strategy") == "scheduled_rebalance" else set()
     reinvested = set(result.dividend_reinvestments.filter(
-        pl.col("status").is_in(["reinvested", "stopped_before_trade", "payer_now_short"]))["session"].to_list())
+        pl.col("status").is_in(["reinvested", "stopped_before_trade", "payer_now_short", "payer_not_quoted"]))["session"].to_list())
     for d in daily["session"]:
         if d in scheduled:
             expected_keys.append((d, "pre_rebalance"))
@@ -244,9 +244,14 @@ def performance(result, *, periods_per_year, risk_free_annual_effective=None,
     account_columns = ["cash", "debt", "dividend_receivable"]
     if meta.get("long_short") is not None:
         account_columns += ["restricted_collateral", "dividend_liability"]
+    if meta.get("lifecycle") is not None:
+        # Pending action claims complete the balance sheet once; obligations are negative.
+        account_columns += ["pending_cash_receivable", "pending_cash_payable",
+                            "pending_security_receivable", "pending_security_obligation"]
+    negative = {"debt", "dividend_liability", "pending_cash_payable", "pending_security_obligation"}
     for col in account_columns:
         allocation = pl.concat([allocation, balances.select("session", pl.lit(f"account:{col}").alias("component"),
-            pl.when(pl.col("equity") > 0).then(pl.col(col)/pl.col("equity")*(-1 if col in {"debt", "dividend_liability"} else 1))
+            pl.when(pl.col("equity") > 0).then(pl.col(col)/pl.col("equity")*(-1 if col in negative else 1))
             .otherwise(None).alias("weight"))])
     attribution = result.attribution.group_by("component").agg(pl.col("pnl").sum()).sort("component")
     if not math.isclose(attribution["pnl"].sum(), daily["pnl"].sum(), rel_tol=1e-10, abs_tol=1e-8):

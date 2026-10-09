@@ -21,6 +21,10 @@ def returns(market, *, method: str, basis: str, dividend_policy: str | None = No
     The first observation per asset remains null, never a synthetic zero return.
     """
     market = _validated_market(market)
+    if market.securities is not None and (market.corporate_actions.height or market.warrants.height
+                                          or market.prices.height != market.sessions.height*market.securities.height):
+        raise ValueError("lifecycle markets with corporate actions or partial quote panels need "
+                         "rt.security_returns, which labels gaps and distributions explicitly")
     if method not in {"simple", "log"}:
         raise ValueError("method must be 'simple' or 'log'")
     allowed = {"price": {"raw", "split_adjusted"},

@@ -27,6 +27,13 @@ Two-strategy information-ratio weights (`information_ratio_weights`) and analyti
 fixed-weight combinations (`combine_strategies`) are documented in
 [their own section](#two-strategy-allocation-and-analytical-combination).
 
+Security lifecycles and corporate actions (`corporate_action_inputs`,
+`CorporateActionPolicy`, `security_status`, `security_returns`, optional lifecycle
+tables in `prepare_market_data`, `corporate_actions`/`warrant_exercises` in both
+simulators, and `rt.adapters.resolve_aliases`) are documented in
+[their own guide](corporate-actions.md#security-lifecycles-and-corporate-actions).
+Markets prepared without lifecycle tables keep every rule below unchanged.
+
 Signed positions are supported through `buy_and_hold` and `scheduled_rebalance`
 with `LongShortPolicy` and `StockBorrow`. See [long/short contracts and notebook
 migration](long-short.md) for signed schemas, collateral, borrow fees, dividends,
@@ -299,6 +306,7 @@ The implementation follows [financial conventions](financial-conventions.md):
 | `attribution` | Session, component, asset (null for account interest), dollar P&L; sums to daily P&L |
 | `receivables` | Session/action, ex/pay dates, entitled shares, original amount, outstanding amount; includes paid entitlements with zero outstanding |
 | `diagnostics` | Session, reconciliation code, residual, currency tolerance |
+| `corporate_actions`, `security_claims` | Corporate-action audit and pending claims by close; typed empty without lifecycle actions ([guide](corporate-actions.md#results)) |
 
 Date-only interest/action events have null `time` and `phase="before_close"`;
 they are modeled daily events, not invented observed timestamps. Sequence follows
@@ -463,7 +471,9 @@ market = rt.load_snapshot("data/local/study-v1")
 `save_snapshot(MarketData, path) -> pathlib.Path` revalidates input identity and
 writes `prices.parquet`, `sessions.parquet`, `splits.parquet`, `dividends.parquet`,
 and `manifest.json`. Polars handles Parquet directly; no PyArrow dependency.
-The manifest records `format_version=1`, canonical `snapshot_id`, complete source
+Markets with lifecycle inputs also write their seven lifecycle tables as format 2;
+see [corporate actions](corporate-actions.md#snapshots). Both formats load.
+The manifest records `format_version` (1 without lifecycle tables), canonical `snapshot_id`, complete source
 metadata, original preparation diagnostics, and each file's SHA-256, row count and
 schema. Include transformations and usage/redistribution restrictions in source
 metadata. No existing path is overwritten. A failed write removes only the newly

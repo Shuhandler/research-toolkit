@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import polars as pl
 
 from ._results import MarketData
+from ._lifecycle import LIFECYCLE_TABLES, _validate_lifecycle
 
 
 UTC = pl.Datetime("us", "UTC")
@@ -79,16 +80,28 @@ def _identity(tables, metadata):
 
 
 def prepare_market_data(*, prices, sessions, splits, dividends, metadata,
-                        missing="raise") -> MarketData:
+                        missing="raise", securities=None, suspensions=None, aliases=None,
+                        corporate_actions=None, action_legs=None, warrants=None,
+                        valuation_marks=None) -> MarketData:
     """Validate and copy an entire daily panel; never fill or drop missing rows.
 
     Exact schemas and required JSON metadata are documented in ``docs/api.md``.
     Supply typed empty action tables and ``actions_complete=True`` when no actions
     occurred. The calendar is caller-supplied, not inferred from observed prices.
     Rows are sorted canonically with diagnostics; numerical dtypes are not coerced.
+
+    Optional lifecycle tables (``securities`` plus suspensions, aliases, corporate
+    actions and legs, warrant terms and supplied valuation marks) replace the
+    every-asset-every-session rule with quotes expected only while a security is
+    listed, unsuspended and not terminated. ``rt.corporate_action_inputs`` builds
+    them from row dictionaries. Without them, validation is unchanged.
     """
     if missing != "raise":
         raise ValueError("only missing='raise' is supported")
+    lifecycle = {"securities": securities, "suspensions": suspensions, "aliases": aliases,
+                 "corporate_actions": corporate_actions, "action_legs": action_legs,
+                 "warrants": warrants, "valuation_marks": valuation_marks}
+    has_lifecycle = any(v is not None for v in lifecycle.values())
     tables = {
         "prices": _table(prices, PRICE_SCHEMA, "prices", ["session", "asset"], nonempty=True),
         "sessions": _table(sessions, SESSION_SCHEMA, "sessions", ["session"], nonempty=True),
@@ -148,17 +161,21 @@ def prepare_market_data(*, prices, sessions, splits, dividends, metadata,
         raise ValueError("session date disagrees with close_at in metadata timezone")
     assets = sorted(prices["asset"].unique().to_list())
     currencies = meta["asset_currencies"]
+    if has_lifecycle:
+        assets = sorted(set(assets) | set((securities if isinstance(securities, pl.DataFrame)
+                                           else pl.DataFrame(schema={"asset": pl.String}))["asset"].to_list()))
     if not isinstance(currencies, dict) or set(currencies) != set(assets):
         raise ValueError("asset_currencies must cover exactly the price assets")
     if any(c != meta["currency"] for c in currencies.values()):
         raise ValueError("only a single currency is supported")
     if (prices["close"] <= 0).any():
         raise ValueError("prices.close must be positive")
-    expected = {(d, a) for d in dates for a in assets}
-    actual = set(prices.select("session", "asset").iter_rows())
-    if actual != expected:
-        raise ValueError(f"prices/session alignment: missing={sorted(expected-actual)[:5]}, "
-                         f"unexpected={sorted(actual-expected)[:5]}")
+    if not has_lifecycle:
+        expected = {(d, a) for d in dates for a in assets}
+        actual = set(prices.select("session", "asset").iter_rows())
+        if actual != expected:
+            raise ValueError(f"prices/session alignment: missing={sorted(expected-actual)[:5]}, "
+                             f"unexpected={sorted(actual-expected)[:5]}")
     ids = splits["action_id"].to_list() + dividends["action_id"].to_list()
     if len(ids) != len(set(ids)):
         raise ValueError("action_id must be unique across all action tables")
@@ -174,6 +191,14 @@ def prepare_market_data(*, prices, sessions, splits, dividends, metadata,
             if table == "dividends" and row["pay_date"] < row["ex_session"]:
                 raise ValueError(f"dividend {row['action_id']} pays before its ex-session")
     # Extra columns/action types fail the exact schemas rather than being ignored.
+    if has_lifecycle:
+        if meta["price_basis"] != "raw":
+            raise ValueError("lifecycle and corporate-action inputs require raw prices; "
+                             "adjusted series already embed an unknown action treatment")
+        extra, lifecycle_diagnostics = _validate_lifecycle(prices, sessions, splits, dividends, lifecycle, meta)
+        diagnostics += lifecycle_diagnostics
+        tables.update(extra)
+    # Legacy markets keep their four-table identity so saved snapshot ids stay valid.
     return MarketData(**tables, metadata=deepcopy(meta),
                       diagnostics=pl.DataFrame(diagnostics, schema=DIAGNOSTIC_SCHEMA),
                       snapshot_id=_identity(tables, meta))
@@ -184,7 +209,8 @@ def _validated_market(market):
         raise ValueError("expected MarketData from prepare_market_data")
     validated = prepare_market_data(prices=market.prices, sessions=market.sessions,
                                     splits=market.splits, dividends=market.dividends,
-                                    metadata=market.metadata)
+                                    metadata=market.metadata,
+                                    **{name: getattr(market, name) for name in LIFECYCLE_TABLES})
     if validated.snapshot_id != market.snapshot_id:
         raise ValueError("MarketData changed after validation; prepare a new snapshot")
     return validated

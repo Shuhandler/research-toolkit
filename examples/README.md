@@ -1,5 +1,10 @@
 # Examples and acceptance replay
 
+`corporate_actions.py` runs a synthetic signed portfolio through a ticker change,
+a spin-off with delayed delivery, a stock-and-cash merger and a short in a cash
+acquisition with delayed settlement, then prints balances, the action audit,
+attribution, dated security status and quoted versus economic parent returns.
+
 `unlevered_buy_and_hold.py` is the small 1A/1B hand-checkable example;
 `financed_buy_and_hold.py` adds 1×/2× comparisons and a separate margin-stop case.
 Both run offline after installing the checkout.

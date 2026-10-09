@@ -265,7 +265,7 @@ def _impact_basket(values, equity, receivable, weights, leverage, binding, recei
     return evaluate((lo+hi)/2)
 
 
-def _bind_cost_schedule(costs, executions, assets, prices, closes, currency):
+def _bind_cost_schedule(costs, executions, assets, prices, closes, currency, session_assets=None):
     """Validate every requested basket and freeze one binding per execution.
 
     A dated mapping requires exact decision keys and explicit source-window and
@@ -285,7 +285,8 @@ def _bind_cost_schedule(costs, executions, assets, prices, closes, currency):
     bindings = {}
     for session, decision in executions.items():
         model = models[decision] if dated else costs
-        binding = model._bind(assets, {a: prices[session, a] for a in assets}, session, decision, currency)
+        bound = assets if session_assets is None else session_assets[session]
+        binding = model._bind(bound, {a: prices[session, a] for a in bound}, session, decision, currency)
         if dated:
             meta = binding.metadata["liquidity"]
             if meta["decision_session"] != decision.isoformat():

@@ -14,13 +14,50 @@ from ._data import (_table, prepare_market_data as _prepare_market_data, PRICE_S
 from ._calendars import _exchange_sessions
 from ._results import ProviderDataResult, ProviderDownloadResult
 
-__all__ = ["yahoo_chart", "download_yahoo"]
+__all__ = ["yahoo_chart", "download_yahoo", "resolve_aliases"]
 
 FACTOR_SCHEMA = {"session": pl.Date, "asset": pl.String, "raw_price_factor": pl.Float64}
+OVERRIDE_SCHEMA = {"asset": pl.String, "session": pl.Date, "provider_label": pl.String,
+                   "provider_ratio": pl.Float64, "action_id": pl.String, "source": pl.String}
+
+
+def resolve_aliases(observations, aliases, *, ticker_column="ticker", exchange_column=None,
+                    date_column="session") -> pl.DataFrame:
+    """Map provider rows keyed by a dated ticker to stable security identifiers.
+
+    ``aliases`` is a validated ``MarketData`` with lifecycle inputs or an alias table
+    (asset, ticker, exchange, valid_from, valid_to, source). Each row must match exactly
+    one alias window on its date (and exchange, when ``exchange_column`` is given);
+    unmatched or ambiguous rows raise rather than being dropped or joined to another
+    security. Adds ``asset`` and keeps the provider ticker. No I/O.
+    """
+    from ._lifecycle import ALIAS_SCHEMA, _typed
+    table = aliases.aliases if hasattr(aliases, "aliases") else aliases
+    if table is None:
+        raise ValueError("market has no lifecycle alias table")
+    table = _typed(table, ALIAS_SCHEMA, "aliases", ["asset", "valid_from"], {"valid_to"})
+    if not isinstance(observations, pl.DataFrame) or any(c not in observations.columns for c in
+            [ticker_column, date_column] + ([exchange_column] if exchange_column else [])):
+        raise ValueError("observations must be a Polars table with the ticker/date(/exchange) columns")
+    if "asset" in observations.columns:
+        raise ValueError("observations already contain an asset column")
+    windows = table.to_dicts()
+    assets = []
+    for row in observations.iter_rows(named=True):
+        day, ticker = row[date_column], row[ticker_column]
+        matches = {w["asset"] for w in windows if w["ticker"] == ticker and w["valid_from"] <= day
+                   and (w["valid_to"] is None or day <= w["valid_to"])
+                   and (exchange_column is None or w["exchange"] == row[exchange_column])}
+        if len(matches) != 1:
+            raise ValueError(f"{ticker} on {day} matches {len(matches)} alias windows; "
+                             "supply an exact dated alias (and exchange) for every row")
+        assets.append(matches.pop())
+    return observations.with_columns(pl.Series("asset", assets, dtype=pl.String))
 
 
 def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basis,
-                availability, raw_adjustment_factors=None, factor_metadata=None) -> ProviderDataResult:
+                availability, raw_adjustment_factors=None, factor_metadata=None,
+                provider_split_overrides=None, lifecycle=None) -> ProviderDataResult:
     """Convert saved decoded Yahoo daily chart responses, without network access.
 
     ``responses`` maps assets to decoded chart JSON, or is a ``ProviderDownloadResult``
@@ -30,6 +67,14 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
     requires complete supplied cumulative split factors through retrieval, even when
     every factor is one. Authoritative calendars/actions/payment dates are always
     caller supplied. See docs/notebook-extensions.md for the provider contract.
+
+    ``provider_split_overrides`` reclassifies a provider "split" event that the
+    caller's sourced corporate actions treat as something else (for example a
+    spin-off): asset, session, provider_label='split', provider_ratio, action_id and
+    source. Raw factors must then undo the provider's adjustment at that session.
+    ``lifecycle`` (from ``rt.corporate_action_inputs``) is passed to
+    ``prepare_market_data``; bars are then expected only on each asset's quoted
+    sessions, so pre-delisting history is kept and later gaps stay identified.
     """
     source_download = None
     if isinstance(responses, ProviderDownloadResult):
@@ -59,6 +104,24 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
     if retrieved < max(closes.values()):
         raise ValueError("response retrieval precedes a requested session close")
     expected = {(d, a) for d in dates for a in responses}
+    lifecycle = dict(lifecycle or {})
+    if lifecycle:
+        from ._lifecycle import LIFECYCLE_TABLES, SECURITY_SCHEMA, SUSPENSION_SCHEMA, _typed, _quote_plan
+        if set(lifecycle) - set(LIFECYCLE_TABLES) or "securities" not in lifecycle:
+            raise ValueError("lifecycle must be rt.corporate_action_inputs(...) output including securities")
+        plan = _quote_plan(_typed(lifecycle["securities"], SECURITY_SCHEMA, "securities", ["asset"],
+                                  {"last_session", "terminated_date"}),
+                           _typed(lifecycle.get("suspensions", pl.DataFrame(schema=SUSPENSION_SCHEMA)),
+                                  SUSPENSION_SCHEMA, "suspensions", ["asset", "first_session"]), dates)
+        expected = {(d, a) for d in dates for a in responses if plan.get((d, a)) == "quoted"}
+    overrides = {}
+    if provider_split_overrides is not None:
+        table = _table(provider_split_overrides, OVERRIDE_SCHEMA, "provider_split_overrides", ["asset", "session"])
+        for r in table.iter_rows(named=True):
+            if r["provider_label"] != "split" or r["provider_ratio"] <= 0:
+                raise ValueError("overrides reclassify provider 'split' events with a positive provider_ratio")
+            overrides[r["session"], r["asset"]] = r
+    quoted = {a: [d for d in dates if (d, a) in expected] for a in responses}
     factors, factor_info = {}, None
     if basis == "raw":
         table = _table(raw_adjustment_factors, FACTOR_SCHEMA, "raw_adjustment_factors", ["session", "asset"], nonempty=True)
@@ -71,13 +134,14 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
         factors = {(d, a): f for d, a, f in table.iter_rows()}
         ratios = {(r["effective_session"], r["asset"]): r["ratio"] for r in split_table.iter_rows(named=True)}
         for a in responses:
-            for before, after in zip(dates, dates[1:]):
-                if not math.isclose(factors[before, a]/factors[after, a], ratios.get((after, a), 1.), rel_tol=1e-10):
-                    raise ValueError("raw factors disagree with authoritative in-window split actions")
+            for before, after in zip(quoted[a], quoted[a][1:]):
+                provider = overrides[after, a]["provider_ratio"] if (after, a) in overrides else 1.
+                if not math.isclose(factors[before, a]/factors[after, a], ratios.get((after, a), 1.)*provider, rel_tol=1e-10):
+                    raise ValueError("raw factors disagree with authoritative in-window split actions and overrides")
         factor_info = deepcopy(factor_metadata)
     elif raw_adjustment_factors is not None or factor_metadata is not None:
         raise ValueError("raw adjustment factors apply only to raw reconstruction")
-    prices, bars, identities = [], [], {}
+    prices, bars, identities, reclassified = [], [], {}, []
     split_map = {(r["effective_session"], r["asset"]): r["ratio"] for r in split_table.iter_rows(named=True)}
     dividend_keys = set(dividend_table.select("ex_session", "asset").iter_rows())
     for asset, payload in responses.items():
@@ -94,7 +158,7 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
             if not timestamps or any(type(t) is not int for t in timestamps):
                 raise ValueError("daily timestamps must be nonempty integer Unix seconds")
             days = [datetime.fromtimestamp(t, timezone.utc).astimezone(zone).date() for t in timestamps]
-            if len(set(days)) != len(days) or set(days) != set(dates):
+            if len(set(days)) != len(days) or set(days) != set(quoted[asset]):
                 raise ValueError("provider bars must exactly match the authoritative sessions; no silent intersection")
             indicators = result["indicators"]
             if len(indicators["quote"]) != 1:
@@ -126,7 +190,14 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
                     d = datetime.fromtimestamp(event["date"], timezone.utc).astimezone(zone).date()
                     if kind == "splits":
                         ratio = float(event["numerator"])/float(event["denominator"])
-                        if (d, asset) not in split_map or not math.isclose(ratio, split_map[d, asset], rel_tol=1e-10):
+                        override = overrides.get((d, asset))
+                        if override is not None:
+                            if not math.isclose(ratio, override["provider_ratio"], rel_tol=1e-10):
+                                raise ValueError("provider split disagrees with its sourced override")
+                            reclassified.append({"asset": asset, "session": d.isoformat(), "provider_label": "split",
+                                                 "provider_ratio": ratio, "action_id": override["action_id"],
+                                                 "source": override["source"]})
+                        elif (d, asset) not in split_map or not math.isclose(ratio, split_map[d, asset], rel_tol=1e-10):
                             raise ValueError("provider split missing from or inconsistent with authoritative actions")
                     elif (d, asset) not in dividend_keys:
                         raise ValueError("provider dividend requires an authoritative ex-date/payment-date record")
@@ -138,7 +209,7 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
         volume_basis=volume_basis, availability=availability,
         availability_limitation="session close proxy; not observed publication time or point-in-time revision history",
         action_source="authoritative caller tables; provider event amounts are not substituted",
-        raw_factor_metadata=factor_info)
+        raw_factor_metadata=factor_info, reclassified_provider_events=reclassified)
     if source_download is not None:
         source = source_download.metadata
         adapter["source_download"] = {"requested_start": source["requested_start"], "requested_end": source["requested_end"],
@@ -146,7 +217,7 @@ def yahoo_chart(responses, *, sessions, splits, dividends, metadata, volume_basi
             "response_sha256": {a: source["instruments"][a]["response_sha256"] for a in source["assets"]}}
     meta["adapter"] = adapter
     market = _prepare_market_data(prices=pl.DataFrame(prices, schema=PRICE_SCHEMA, orient="row"),
-        sessions=calendar, splits=split_table, dividends=dividend_table, metadata=meta)
+        sessions=calendar, splits=split_table, dividends=dividend_table, metadata=meta, **lifecycle)
     bar_table = pl.DataFrame(bars, schema={"session": pl.Date, "asset": pl.String, "provider_timestamp": pl.Int64,
         "provider_close": pl.Float64, "provider_adjclose": pl.Float64, "provider_volume": pl.Float64,
         "raw_price_factor": pl.Float64, "raw_share_volume": pl.Float64, "dollar_volume": pl.Float64,

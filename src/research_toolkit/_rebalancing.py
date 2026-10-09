@@ -6,6 +6,7 @@ import polars as pl
 
 from ._data import _table
 from ._portfolio import _number, _weights
+from ._lifecycle import _market_assets
 
 TARGET_SCHEMA = {"decision_session": pl.Date, "session": pl.Date, "asset": pl.String,
                  "weight": pl.Float64, "gross_leverage": pl.Float64}
@@ -56,7 +57,7 @@ def _targets(targets, market, entry, end, policy):
     table = _table(targets, TARGET_SCHEMA, "targets", ["session", "asset"], nonempty=True).sort("session", "asset")
     calendar = market.sessions["session"].to_list()
     assets = sorted(table["asset"].unique().to_list())
-    if not set(assets) <= set(market.prices["asset"]):
+    if not set(assets) <= _market_assets(market):
         raise ValueError("targets contain unknown assets")
     if table["session"][0] != entry:
         raise ValueError("first target must execute on entry_session")

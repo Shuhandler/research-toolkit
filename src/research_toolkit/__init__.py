@@ -14,6 +14,7 @@ from ._results import AllocationResult, RiskResult, RollingRiskResult
 from ._costs import TradeCosts
 from ._execution import SquareRootImpactCosts, estimate_liquidity, estimate_trade_costs, size_entry_orders
 from ._data import prepare_market_data
+from ._lifecycle import CorporateActionPolicy, corporate_action_inputs, security_status, security_returns
 from ._financing import Financing
 from ._sofr import SOFRFinancing
 from ._dividends import DividendReinvestment
@@ -46,6 +47,7 @@ __all__ = [
     "PerformanceDiagnostics", "FactorRegressionResult", "SignalDiagnosticsResult",
     "information_ratio_weights", "combine_strategies", "StrategyAllocationResult", "StrategyCombinationResult", "trading_calendar", "TradingCalendar",
     "SOFRFinancing",
+    "CorporateActionPolicy", "corporate_action_inputs", "security_status", "security_returns",
     "DividendReinvestment",
     "inverse_volatility_weights", "risk_contributions", "rolling_risk",
     "AllocationResult", "RiskResult", "RollingRiskResult", "scheduled_rebalance", "RebalancePolicy", "prepare_market_data", "returns", "cumulative_returns", "equal_weights", "buy_and_hold",

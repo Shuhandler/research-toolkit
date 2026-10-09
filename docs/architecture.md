@@ -27,7 +27,9 @@ future module only with working, tested behavior, without stub hierarchies.
 | `_sofr.py` | Historical SOFR/publication contracts, source identity, known-rate selection and loan policy | Post-M2 |
 | `_backtest.py` | Shared buy-and-hold/scheduled ledger: ordered fills, quantities, cash, receivables, debt, reconciliation. `_simulate` builds one `_Ledger` (validated setup, `enter`, `run`, `result`) | 1B–2 |
 | `_version.py` | Installed distribution version for `rt.__version__` and run metadata | Post-M3 |
-| `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity | 1D |
+| `_snapshots.py` | Immutable local Parquet/JSON snapshots with file hashes and data identity (format 1 legacy, format 2 with lifecycle tables) | 1D |
+| `_lifecycle.py` | Security master, aliases, suspensions, corporate-action/warrant/mark schemas and validation, `CorporateActionPolicy`, dated status and analytical security returns | Corporate-action extension |
+| `_actions.py` | `_ActionLedger` mixin: claims, conversions, deliveries, warrant expiry/exercise, distributed-security liquidation, unvalued-stop rollback | Corporate-action extension |
 | `_metrics.py` | Performance tables, benchmark comparisons, result validation, historical VaR/ETL | 1D onward |
 | `_calendars.py` | Optional exchange-calendar sessions/closes and explicit reporting calendars | Post-M3 |
 | `_series.py` | Performance reports from a supplied daily net P&L series and starting capital | Post-M3 |
@@ -397,3 +399,18 @@ future extensions (not implemented): more than two strategies with a general
 constrained optimizer, walk-forward re-estimation, and drifting-sleeve or
 cost-aware sleeve rebalancing.
 
+
+## Security lifecycles and corporate actions — implemented
+
+`MarketData` gains seven optional lifecycle tables, all None for legacy markets,
+whose canonical identity is unchanged. `_lifecycle` validates them inside
+`prepare_market_data` and replaces the full-panel price rule with expected quotes
+per listing, suspension and termination. `_backtest._Ledger` inherits
+`_actions._ActionLedger`; with lifecycle inputs it compiles the reachable action
+schedule once, posts conversions, claims, settlements and deliveries through the
+existing `event` method, and reconciles claim cash and claim quantities at every
+valuation. Legacy markets take the original code paths (verified bit-identical on
+the existing examples). Baskets trade only quoted strategy assets; claims and
+retained distributed securities are an untraded sleeve. An unvalued close restores
+a per-close checkpoint and stops. No provider, plotting or new dependency enters
+simulation. See [the guide](corporate-actions.md).

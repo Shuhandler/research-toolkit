@@ -11,6 +11,7 @@ import polars as pl
 
 from ._data import _local_midnight_utc, _table
 from ._portfolio import _number
+from ._lifecycle import _market_assets
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -91,7 +92,8 @@ def _cutoff(day):
     return _local_midnight_utc(day, "America/New_York")
 
 
-def _borrow_plan(config, assets, start, end):
+def _borrow_plan(config, assets, start, end, ends=None):
+    """Resolve fees per accrual date; ``ends`` maps terminated assets to their termination date."""
     if not isinstance(config, StockBorrow):
         raise ValueError("signed portfolios require explicit StockBorrow, including zero fees")
     validated = replace(config)
@@ -107,7 +109,8 @@ def _borrow_plan(config, assets, start, end):
     else:
         plan = {(r["date"], r["asset"]): (r["annual_rate"], r["available_at"])
                 for r in config.rates.iter_rows(named=True)}
-        if set(plan) != {(d, a) for d in days for a in assets}:
+        ends = ends or {}
+        if set(plan) != {(d, a) for d in days for a in assets if a not in ends or d < ends[a]}:
             raise ValueError("dated borrow rates must cover every requested calendar date and potentially short asset exactly")
         source = [{k: v.isoformat() if hasattr(v, "isoformat") else v for k, v in r.items()}
                   for r in config.rates.to_dicts()]
@@ -146,7 +149,7 @@ def _signed_targets(targets, market, entry, end, policy):
     if entry not in sessions or end not in sessions:
         raise ValueError("entry/end must be supplied sessions")
     universe = set(table["asset"])
-    if not universe <= set(market.prices["asset"]):
+    if not universe <= _market_assets(market):
         raise ValueError("unknown target assets")
     plans = {}
     for day in table["session"].unique().sort():

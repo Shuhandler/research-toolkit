@@ -19,8 +19,11 @@ from ._sofr import SOFRFinancing, _sofr_plan
 from ._dividends import DividendReinvestment
 from ._portfolio import BuyHoldPolicy, _number, _weights
 from ._results import BacktestResult, SignalResult
+from ._lifecycle import _market_assets
 from ._signals import _checked_signals, _attach_signals, SIGNAL_AUDIT_SCHEMA
 from ._rebalancing import RebalancePolicy, _targets, _basket
+from ._actions import _ActionLedger, _compile, ACTION_SCHEMAS, CLAIM_COLUMNS
+from ._lifecycle import CorporateActionPolicy
 
 
 from ._version import __version__ as PACKAGE_VERSION
@@ -50,7 +53,7 @@ SCHEMAS = {
               "long_exposure": F, "short_exposure": F, "short_liability": F, "margin_required": F, "gross_exposure": F,
               "net_exposure": F, "gross_leverage": F, "drawdown": F,
               "equity_ratio": F, "margin_breached": pl.Boolean,
-              "includes_entry_costs": pl.Boolean},
+              "includes_entry_costs": pl.Boolean, **{c: F for c in CLAIM_COLUMNS}},
     "positions": {"session": D, "asset": S, "quantity": F, "raw_mark": F,
                   "market_value": F, "weight": F},
     "trades": {"trade_id": S, "session": D, "time": UTC, "asset": S,
@@ -61,10 +64,12 @@ SCHEMAS = {
     "events": {"event_id": S, "date": D, "time": UTC, "sequence": I, "phase": S,
                "type": S, "asset": S, "action_id": S, "trade_id": S,
                "quantity_delta": F, "cash_delta": F, "debt_delta": F,
-               "receivable_delta": F, "collateral_delta": F, "dividend_liability_delta": F},
+               "receivable_delta": F, "collateral_delta": F, "dividend_liability_delta": F,
+               "claim_cash_delta": F, "claim_quantity_delta": F},
     "valuations": {"session": D, "time": UTC, "phase": S, "market_value": F,
                    "cash": F, "debt": F, "dividend_receivable": F, "dividend_liability": F,
-                   "restricted_collateral": F, "short_liability": F, "equity": F},
+                   "restricted_collateral": F, "short_liability": F, "equity": F,
+                   **{c: F for c in CLAIM_COLUMNS}},
     "attribution": {"session": D, "component": S, "asset": S, "pnl": F},
     "receivables": {"session": D, "action_id": S, "asset": S, "ex_session": D,
                     "pay_date": D, "entitled_quantity": F, "amount": F, "outstanding": F},
@@ -82,6 +87,7 @@ SCHEMAS = {
         "borrowing_rate": F, "cash_rate": F, "borrowing_day_fraction": F, "cash_day_fraction": F,
         "opening_debt": F, "opening_cash": F, "borrowing_interest": F, "cash_interest": F},
     "diagnostics": {"session": D, "code": S, "residual": F, "tolerance": F},
+    **ACTION_SCHEMAS,
 }
 
 
@@ -102,7 +108,9 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
                  end_session: date, policy: BuyHoldPolicy, costs: TradeCosts | SquareRootImpactCosts,
                  cash_rate: float | None = None, cash_day_count: str | None = None,
                  financing: Financing | SOFRFinancing | None = None,
-                 dividend_reinvestment: DividendReinvestment | None = None) -> BacktestResult:
+                 dividend_reinvestment: DividendReinvestment | None = None,
+                 corporate_actions: CorporateActionPolicy | None = None,
+                 warrant_exercises: pl.DataFrame | None = None) -> BacktestResult:
     """Run a fractional-share, raw-close buy-and-hold portfolio with explicit funding.
 
     Supply ``financing`` for leveraged runs. The existing explicit ``cash_rate``
@@ -121,6 +129,12 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
     explicit financing, and policy.initial_gross_leverage=1. Exact shares are never
     rescaled to pay costs. Restricted collateral cannot fund the long holdings.
 
+    Markets with lifecycle inputs apply acquisitions, distributions, warrant expiry
+    and explicit ``warrant_exercises`` through the same ledger; supply
+    ``corporate_actions=CorporateActionPolicy(...)`` whenever they affect the run.
+    A held position or claim without a market quote or supplied mark stops the run
+    at the last valued close (``stop_reason='unvalued_position'``).
+
     All results are numerical Polars tables. See ``docs/api.md`` for the complete
     input and output contracts. This function performs no network or file I/O.
     """
@@ -128,7 +142,8 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
         entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
         cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing,
         dividend_reinvestment=dividend_reinvestment, equity_exposures=equity_exposures,
-        quantities=quantities, long_short=long_short, stock_borrow=stock_borrow)
+        quantities=quantities, long_short=long_short, stock_borrow=stock_borrow,
+        corporate_actions=corporate_actions, warrant_exercises=warrant_exercises)
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
@@ -136,7 +151,9 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
                         costs: TradeCosts | SquareRootImpactCosts | Mapping[date, SquareRootImpactCosts],
                         financing: Financing | SOFRFinancing,
                         dividend_reinvestment: DividendReinvestment | None = None,
-                        long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None):
+                        long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None,
+                        corporate_actions: CorporateActionPolicy | None = None,
+                        warrant_exercises: pl.DataFrame | None = None):
     """Execute dated long-only or explicitly signed targets through the shared ledger.
 
     Signed targets require long_short and stock_borrow and use equity_exposure,
@@ -147,6 +164,9 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     requires explicit policy opt-in. Every basket includes explicit zero exits,
     and no trade executes on the terminal session. See docs/api.md for schemas,
     receivable funding rules, turnover denominators, and research margin stops.
+    Corporate actions use the same ``corporate_actions``/``warrant_exercises``
+    contract as ``buy_and_hold``; a nonzero target for a security that is not
+    quoted at its execution session is rejected as stale.
     """
     if not isinstance(policy, RebalancePolicy) or not isinstance(financing, (Financing, SOFRFinancing)):
         raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing or SOFRFinancing")
@@ -163,6 +183,7 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
             entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
             financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
             dividend_reinvestment=dividend_reinvestment, long_short=long_short, stock_borrow=stock_borrow,
+            corporate_actions=corporate_actions, warrant_exercises=warrant_exercises,
             equity_exposures=first if kind == "equity_exposure" else None,
             quantities=first if kind == "quantity" else None,
             target_notionals=first if kind == "target_notional" else None)
@@ -181,7 +202,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     result = _simulate(market, weights=first_weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
         financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
-        dividend_reinvestment=dividend_reinvestment)
+        dividend_reinvestment=dividend_reinvestment, corporate_actions=corporate_actions,
+        warrant_exercises=warrant_exercises)
 
     return _attach_signals(result, signals) if signals else result
 
@@ -189,7 +211,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
               costs, cash_rate=None, cash_day_count=None, financing=None,
               schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None,
-              equity_exposures=None, quantities=None, long_short=None, stock_borrow=None, target_notionals=None):
+              equity_exposures=None, quantities=None, long_short=None, stock_borrow=None, target_notionals=None,
+              corporate_actions=None, warrant_exercises=None):
     """Validate one run, book its entry, process every calendar date, and return the records."""
     ledger = _Ledger(market, weights=weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
@@ -197,13 +220,14 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         schedule=schedule, target_table=target_table, rebalance_policy=rebalance_policy,
         dividend_reinvestment=dividend_reinvestment, equity_exposures=equity_exposures,
         quantities=quantities, long_short=long_short, stock_borrow=stock_borrow,
-        target_notionals=target_notionals)
+        target_notionals=target_notionals, corporate_actions=corporate_actions,
+        warrant_exercises=warrant_exercises)
     ledger.enter()
     ledger.run()
     return ledger.result()
 
 
-class _Ledger:
+class _Ledger(_ActionLedger):
     """One simulation's account; every balance change is posted through ``event``.
 
     Construction validates the configuration in a fixed order and resolves funding,
@@ -215,8 +239,9 @@ class _Ledger:
     def __init__(self, market, *, weights, initial_capital, entry_session, end_session, policy,
                  costs, cash_rate, cash_day_count, financing, schedule, target_table,
                  rebalance_policy, dividend_reinvestment, equity_exposures, quantities,
-                 long_short, stock_borrow, target_notionals):
+                 long_short, stock_borrow, target_notionals, corporate_actions=None, warrant_exercises=None):
         self.market = _validated_market(market)
+        self.action_policy, self.exercise_input = corporate_actions, warrant_exercises
         self.policy, self.costs, self.financing = policy, costs, financing
         self.entry_session, self.end_session = entry_session, end_session
         self.schedule, self.target_table, self.rebalance_policy = schedule, target_table, rebalance_policy
@@ -312,19 +337,39 @@ class _Ledger:
             self.signed_kind, signed_input = "quantity", quantities
         else:
             self.signed_kind, signed_input = "equity_exposure", equity_exposures
-        universe = market.prices["asset"].unique().to_list()
+        universe = (sorted(_market_assets(market)) if market.securities is not None
+                    else market.prices["asset"].unique().to_list())
         self.allocation = (_signed(signed_input, universe, self.signed_kind) if self.signed
                            else _weights(weights, universe))
+        self.universe = set(self.allocation)
+        self.ca = _compile(market, self.universe, self.action_policy, self.exercise_input, self.entry_session,
+                           self.end_session, set(self.all_sessions),
+                           isinstance(self.costs, (SquareRootImpactCosts, Mapping)))
         self.borrow_plan, self.borrow_metadata, self.short_assets = {}, None, []
         if self.signed:
             self.short_assets = sorted({a for basket in ([p[0] for p in schedule.values()] if schedule else [self.allocation])
                                         for a, v in basket.items() if v < 0})
+            ends = None
+            if self.ca is not None:
+                ends = self.ca.terminated
+                if self.ca.policy is not None and self.ca.policy.short_obligations == "borrowed_short_position":
+                    # Short holders of a source become short its delivered securities.
+                    shorts = set(self.short_assets)
+                    while True:
+                        grown = shorts | {leg["asset"] for actions in self.ca.by_date.values() for action in actions
+                                          if action["source_asset"] in shorts
+                                          for leg in action["legs"] if leg["leg_type"] == "security"}
+                        if grown == shorts:
+                            break
+                        shorts = grown
+                    self.short_assets = sorted(shorts)
             self.borrow_plan, self.borrow_metadata = _borrow_plan(
-                self.stock_borrow, self.short_assets, self.entry_session, self.end_session)
-        self.assets = sorted(self.allocation)
+                self.stock_borrow, self.short_assets, self.entry_session, self.end_session, ends)
+        self.assets = sorted(self.allocation) if self.ca is None else sorted(self.ca.reachable)
+        self.assets_set = set(self.assets)
         total_weight = math.fsum(self.allocation.values())
         self.resolved_weights = (self.allocation.copy() if self.signed else
-                                 {a: self.allocation[a] / total_weight for a in self.assets})
+                                 {a: self.allocation[a] / total_weight for a in self.allocation})
         self.dates = [d for d in self.all_sessions if self.entry_session <= d <= self.end_session]
         self.session_set = set(self.dates)
         self.closes = dict(market.sessions.select("session", "close_at").iter_rows())
@@ -339,15 +384,21 @@ class _Ledger:
         if self.impact_costs:
             executions = ({day: plan[2] for day, plan in self.schedule.items()} if self.schedule
                           else {self.entry_session: None})
+            # Lifecycle runs bind each basket to the strategy assets quoted at its execution.
             self.bindings = _bind_cost_schedule(costs, executions, assets, self.prices, self.closes,
-                                                self.market.metadata["currency"])
+                                                self.market.metadata["currency"],
+                                                None if self.ca is None else {day: sorted(
+                                                    a for a in self.universe if (day, a) in self.prices)
+                                                    for day in executions})
             self.entry_binding = self.bindings[self.entry_session]
-            self.gross = 0. if self.signed else _entry_size(self.capital, self.exposure, self.resolved_weights, self.entry_binding)
+            entry_weights = (self.resolved_weights if self.ca is None else
+                             {a: w for a, w in self.resolved_weights.items() if (self.entry_session, a) in self.prices})
+            self.gross = 0. if self.signed else _entry_size(self.capital, self.exposure, entry_weights, self.entry_binding)
         elif self.signed:
             self.gross = 0.
         else:
             rates = self.rates
-            fee_rate = math.fsum(self.resolved_weights[a] * math.fsum(rates[c][a] for c in rates) for a in assets)
+            fee_rate = math.fsum(self.resolved_weights[a] * math.fsum(rates[c][a] for c in rates) for a in self.resolved_weights)
             self.gross = self.capital * self.exposure / (1 + self.exposure * fee_rate)
         if not math.isfinite(self.gross):
             raise ValueError("initial notional is not representable")
@@ -355,12 +406,23 @@ class _Ledger:
     def _prepare_records(self):
         self.split_dates, self.ex_dates = defaultdict(list), defaultdict(list)
         for action in self.market.splits.iter_rows(named=True):
-            if action["asset"] in self.allocation:
+            if action["asset"] in self.assets_set:
                 self.split_dates[action["effective_session"]].append(action)
         for action in self.market.dividends.iter_rows(named=True):
-            if action["asset"] in self.allocation:
+            if action["asset"] in self.assets_set:
                 self.ex_dates[action["ex_session"]].append(action)
         self.records = {name: [] for name in SCHEMAS}
+        if self.ca is not None:
+            # A target cannot trade a security that is not quoted (terminated,
+            # suspended, not yet listed) at its execution close.
+            baskets = ({day: plan[0] for day, plan in self.schedule.items()} if self.schedule
+                       else {self.entry_session: self.allocation})
+            for day, basket in baskets.items():
+                for asset, target in basket.items():
+                    if target and (day, asset) not in self.prices:
+                        status = ("terminated" if asset in self.ca.terminated and day >= self.ca.terminated[asset]
+                                  else "not quoted")
+                        raise ValueError(f"stale target: {asset} is {status} on {day} and cannot be traded")
         if self.target_table is not None:
             self.records["targets"] = self.target_table.to_dicts()
             # Validate all cost/leverage combinations before processing the first fill.
@@ -381,12 +443,17 @@ class _Ledger:
         self.cash_deltas, self.receivable_deltas, self.debt_deltas = [], [], []
         self.collateral_deltas, self.liability_deltas = [], []
         self.quantity_deltas = defaultdict(list)
+        self.claims, self.deferred, self.action_held, self.applied = {}, [], set(), set()
+        self.claim_counter, self.unvalued = 0, None
+        self.claim_cash_deltas, self.claim_quantity_deltas = [], defaultdict(list)
+        self._delta_lists = ("cash_deltas", "receivable_deltas", "debt_deltas", "collateral_deltas",
+                             "liability_deltas", "claim_cash_deltas")
         self.status, self.stop_reason, self.stop_session, self.stop_time = "complete", None, None, None
 
     # ------------------------------------------------------------- posting
 
     def event(self, day, kind, *, phase="before_close", asset=None, action_id=None,
-              trade_id=None, dq=0.0, dc=0.0, dr=0.0, dd=0.0, dk=0.0, dl=0.0):
+              trade_id=None, dq=0.0, dc=0.0, dr=0.0, dd=0.0, dk=0.0, dl=0.0, dcc=0.0, dcq=0.0):
         events = self.records["events"]
         seq = len(events)
         events.append({
@@ -396,7 +463,11 @@ class _Ledger:
             "action_id": action_id, "trade_id": trade_id,
             "quantity_delta": dq, "cash_delta": dc, "debt_delta": dd,
             "receivable_delta": dr, "collateral_delta": dk, "dividend_liability_delta": dl,
+            "claim_cash_delta": dcc, "claim_quantity_delta": dcq,
         })
+        self.claim_cash_deltas.append(dcc)
+        if dcq:
+            self.claim_quantity_deltas[asset].append(dcq)
         self.collateral_deltas.append(dk)
         self.liability_deltas.append(dl)
         self.cash_deltas.append(dc)
@@ -409,12 +480,16 @@ class _Ledger:
         """Record a valuation and reconcile every balance with its posted events."""
         assets, quantity, capital = self.assets, self.quantity, self.capital
         cash, collateral, debt = self.cash, self.collateral, self.debt
-        values = {a: quantity[a] * self.prices[day, a] for a in assets}
+        values = ({a: quantity[a] * self.prices[day, a] for a in assets} if self.ca is None
+                  else {a: self.value_of(day, a) for a in assets})
         mv = math.fsum(values.values())
         receivable = math.fsum(item["outstanding"] for item in self.receivables.values())
         liability = math.fsum(item["outstanding"] for item in self.liabilities.values())
-        equity = math.fsum([mv, cash, collateral, receivable, -liability, -debt])
-        if (not all(math.isfinite(v) for v in (mv, cash, collateral, receivable, liability, debt, equity))
+        claim_values = self.claim_totals() if self.ca is not None else (0., 0., 0., 0.)
+        net_claims = math.fsum([claim_values[0], -claim_values[1], claim_values[2], -claim_values[3]])
+        equity = (math.fsum([mv, cash, collateral, receivable, -liability, -debt]) if self.ca is None
+                  else math.fsum([mv, cash, collateral, receivable, -liability, -debt, net_claims]))
+        if (not all(math.isfinite(v) for v in (mv, cash, collateral, receivable, liability, debt, equity, *claim_values))
                 or min(cash, collateral, receivable, liability, debt) < 0):
             raise ArithmeticError("ledger produced invalid balances")
         if phase in {"pre_entry", "post_entry"} and equity <= 0:
@@ -422,18 +497,30 @@ class _Ledger:
         self.records["valuations"].append({"session": day, "time": self.closes[day], "phase": phase,
                                            "market_value": mv, "cash": cash, "debt": debt,
                                            "dividend_receivable": receivable, "dividend_liability": liability,
-                                           "restricted_collateral": collateral, "short_liability": sum(max(-v, 0.) for v in values.values()), "equity": equity})
+                                           "restricted_collateral": collateral, "short_liability": sum(max(-v, 0.) for v in values.values()), "equity": equity,
+                                           **dict(zip(CLAIM_COLUMNS, claim_values))})
         checks = {
             "cash_reconciliation": (cash, math.fsum([capital, *self.cash_deltas])),
             "receivable_reconciliation": (receivable, math.fsum(self.receivable_deltas)),
             "debt_reconciliation": (debt, math.fsum(self.debt_deltas)),
             "collateral_reconciliation": (collateral, math.fsum(self.collateral_deltas)),
             "dividend_liability_reconciliation": (liability, math.fsum(self.liability_deltas)),
-            "balance_sheet": (equity, math.fsum([*values.values(), cash, collateral, receivable, -liability, -debt])),
+            "balance_sheet": (equity, math.fsum([*values.values(), cash, collateral, receivable, -liability, -debt])
+                              if self.ca is None else
+                              math.fsum([*values.values(), cash, collateral, receivable, -liability, -debt, net_claims])),
         }
+        if self.ca is not None:
+            checks["claim_cash_reconciliation"] = (
+                math.fsum(c["amount"] for c in self.claims.values() if c["kind"] == "cash"),
+                math.fsum(self.claim_cash_deltas))
+            for a in assets:
+                pending = math.fsum(c["quantity"] for c in self.claims.values() if c["kind"] == "security" and c["asset"] == a)
+                if not math.isclose(pending, math.fsum(self.claim_quantity_deltas[a]), rel_tol=1e-12, abs_tol=1e-12):
+                    raise ArithmeticError(f"claim quantity reconciliation failed for {a}")
         if self.signed:
             checks["marked_collateral"] = (collateral, self.long_short.collateral_multiple *
-                math.fsum(max(-v, 0.) for v in values.values()))
+                (math.fsum(max(-v, 0.) for v in values.values()) if self.ca is None
+                 else math.fsum([*(max(-v, 0.) for v in values.values()), self.obligations()])))
         for a in assets:
             if not math.isclose(quantity[a], math.fsum(self.quantity_deltas[a]), rel_tol=1e-12, abs_tol=1e-12):
                 raise ArithmeticError(f"quantity reconciliation failed for {a}")
@@ -453,7 +540,12 @@ class _Ledger:
         return max(0., self.cash-math.fsum(self.reinvestment_budgets.values()))
 
     def mark_collateral(self, day, values, phase="close"):
-        required = self.long_short.collateral_multiple * math.fsum(max(-v, 0.) for v in values.values())
+        shorts = math.fsum(max(-v, 0.) for v in values.values())
+        if self.ca is not None:
+            # Pending delivery/cash obligations of short holders stay collateralized
+            # until they are actually settled, not merely when a ticker disappears.
+            shorts = math.fsum([shorts, self.obligations()])
+        required = self.long_short.collateral_multiple * shorts
         change = required-self.collateral
         self.fund(day, max(change-self.available_cash(), 0.), phase)
         self.cash -= change
@@ -463,6 +555,14 @@ class _Ledger:
 
     def margin_required(self, values):
         long_short = self.long_short
+        if self.ca is not None and self.ca.policy is not None:
+            policy, warrants = self.ca.policy, self.ca.warrants
+            pos_cash, neg_cash, pos_sec, neg_sec = self.claim_totals()
+            return math.fsum([
+                long_short.long_margin*math.fsum(max(v, 0.) for a, v in values.items() if a not in warrants),
+                policy.warrant_margin*math.fsum(max(v, 0.) for a, v in values.items() if a in warrants),
+                long_short.short_margin*math.fsum(max(-v, 0.) for v in values.values()),
+                policy.pending_claim_margin*(pos_cash+pos_sec), policy.obligation_margin*(neg_cash+neg_sec)])
         return (long_short.long_margin*math.fsum(max(v, 0.) for v in values.values()) +
                 long_short.short_margin*math.fsum(max(-v, 0.) for v in values.values()))
 
@@ -470,12 +570,16 @@ class _Ledger:
         if self.signed:
             return _below_margin(equity, self.margin_required(values))
         gross_value = math.fsum(values.values())
+        if self.ca is not None:
+            # Undelivered securities are risky exposure; cash claims are like receivables.
+            gross_value = math.fsum([gross_value, self.claim_totals()[2]])
         return _below_margin(equity/gross_value if gross_value else None, self.threshold)
 
     def position_rows(self, day, values, equity):
         for asset in self.assets:
             self.records["positions"].append({"session": day, "asset": asset,
-                                              "quantity": self.quantity[asset], "raw_mark": self.prices[day, asset],
+                                              "quantity": self.quantity[asset],
+                                              "raw_mark": self.prices[day, asset] if self.ca is None else self.mark(day, asset),
                                               "market_value": values[asset],
                                               "weight": values[asset] / equity if equity > 0 else None})
 
@@ -483,7 +587,15 @@ class _Ledger:
 
     def signed_basket(self, day, values, equity, targets, phase, decision=None):
         """Execute one atomic signed basket: release collateral, trade, re-segregate, sweep."""
-        assets, quantity, records, capital = self.assets, self.quantity, self.records, self.capital
+        quantity, records, capital = self.quantity, self.records, self.capital
+        if self.ca is None:
+            assets, base = self.assets, equity
+        else:
+            # Only quoted strategy assets trade; other holdings and claims stay outside.
+            assets, outside = self._basket_scope(day, targets, values)
+            # A long sleeve is excluded from the sizing base; a short sleeve never enlarges it.
+            base = equity-max(outside, 0.) if self.signed_kind == "equity_exposure" else equity
+        targets = {a: targets[a] for a in assets}
         marks = {a: self.prices[day, a] for a in assets}
         old_quantities, fills = quantity.copy(), {}
         binding = self.bindings[day] if self.impact_costs else None
@@ -495,13 +607,13 @@ class _Ledger:
         def marginal(a, n):
             return binding.marginal(a, n) if binding else math.fsum(rates[c][a] for c in rates)
 
-        changes, fee = _signed_size(values, equity, targets, self.signed_kind, marks, components, marginal)
-        new_values = {a: values[a]+changes[a] for a in assets}
+        changes, fee = _signed_size({a: values[a] for a in assets}, base, targets, self.signed_kind, marks, components, marginal)
+        new_values = {a: values[a]+changes.get(a, 0.) for a in values}
         after = equity-fee
         if not all(math.isfinite(v) for v in [after, *new_values.values(), *changes.values()]) or after <= 0:
             raise ValueError("signed basket equity/positions are not representable")
-        gross_value = math.fsum(abs(v) for v in new_values.values())
-        if self.rebalance_policy and gross_value and any(abs(v)/gross_value > self.rebalance_policy.max_asset_weight+1e-12 for v in new_values.values()):
+        gross_value = math.fsum(abs(new_values[a]) for a in assets)
+        if self.rebalance_policy and gross_value and any(abs(new_values[a])/gross_value > self.rebalance_policy.max_asset_weight+1e-12 for a in assets):
             raise ValueError("signed target exceeds max_asset_weight as a share of gross exposure")
         if phase == "entry_close" and self.breached(new_values, after):
             raise ValueError("signed entry violates long/short margin requirements")
@@ -511,9 +623,10 @@ class _Ledger:
             self.cash += self.collateral
             self.event(day, "collateral_release_for_basket", phase=phase, dc=self.collateral, dk=-self.collateral)
             self.collateral = 0.
-        required = self.long_short.collateral_multiple*math.fsum(max(-v, 0.) for v in new_values.values())
+        required = self.long_short.collateral_multiple*(math.fsum(max(-v, 0.) for v in new_values.values())
+            if self.ca is None else math.fsum([*(max(-v, 0.) for v in new_values.values()), self.obligations()]))
         self.fund(day, max(math.fsum([*changes.values(), fee, required, -self.cash]), 0.), phase)
-        for a in sorted(assets, key=lambda a: (changes[a] >= 0, a)):
+        for a in sorted(changes, key=lambda a: (changes[a] >= 0, a)):
             n = changes[a]
             if not n:
                 continue
@@ -548,9 +661,10 @@ class _Ledger:
             self.cash -= repayment
             self.debt -= repayment
             self.event(day, "debt_repayment", phase=phase, dc=-repayment, dd=-repayment)
-        actual_equity = math.fsum([*(quantity[a]*marks[a] for a in assets), self.cash, self.collateral,
+        actual_equity = (math.fsum([*(quantity[a]*marks[a] for a in assets), self.cash, self.collateral,
             math.fsum(v["outstanding"] for v in self.receivables.values()),
-            -math.fsum(v["outstanding"] for v in self.liabilities.values()), -self.debt])
+            -math.fsum(v["outstanding"] for v in self.liabilities.values()), -self.debt]) if self.ca is None
+            else self.current_equity({a: self.value_of(day, a) for a in self.assets}))
         residual, tolerance = _check(actual_equity, after, max(capital, equity), "signed_basket_cost_equity")
         records["diagnostics"].append(dict(session=day, code="signed_basket_cost_equity", residual=residual, tolerance=tolerance))
         if self.signed_kind == "target_notional":
@@ -598,12 +712,14 @@ class _Ledger:
         self.cumulative_pnls, self.simple_returns = [], []
         self.wealth = 1.0
         self.peak = max(capital, post_entry_equity)
+        if self.ca is not None:
+            self._checkpoint()
 
     def _enter_long_basket(self):
         entry_session, capital, records = self.entry_session, self.capital, self.records
         rates = self.rates
         entry_plan = []
-        for asset in self.assets:
+        for asset in self.resolved_weights:
             notional = self.gross * self.resolved_weights[asset]
             if notional == 0:
                 continue
@@ -663,11 +779,17 @@ class _Ledger:
         records, capital, policy = self.records, self.capital, self.rebalance_policy
         binding = self.bindings[day] if self.impact_costs else None
         rates = self.rates
+        basket_values, basket_equity = values, equity
+        if self.ca is not None:
+            # Retained distributed securities and pending claims form an untraded sleeve.
+            scope, outside = self._basket_scope(day, target_weights, values)
+            target_weights = {a: target_weights[a] for a in scope}
+            basket_values, basket_equity = {a: values[a] for a in scope}, equity-outside
         if self.impact_costs:
-            changes, cost = _impact_basket(values, equity, outstanding, target_weights,
+            changes, cost = _impact_basket(basket_values, basket_equity, outstanding, target_weights,
                 target_leverage, binding, policy.receivable_policy)
         else:
-            changes, cost = _basket(values, equity, outstanding, target_weights,
+            changes, cost = _basket(basket_values, basket_equity, outstanding, target_weights,
                 target_leverage, rates, policy.receivable_policy)
         new_net_cash = math.fsum([self.cash, -self.debt, -math.fsum(changes.values()), -cost])
         new_debt = max(-new_net_cash, 0.)
@@ -686,7 +808,7 @@ class _Ledger:
             self.cash += borrowing
             self.debt += borrowing
             self.event(day, "borrowing", phase="rebalance_close", dc=borrowing, dd=borrowing)
-        for asset in sorted(self.assets, key=lambda a: (changes[a] >= 0, a)):
+        for asset in sorted(changes, key=lambda a: (changes[a] >= 0, a)):
             notional = changes[asset]
             if notional == 0:
                 continue
@@ -731,8 +853,12 @@ class _Ledger:
         records["diagnostics"].append({"session": day, "code": "rebalance_cash_roundoff",
                                        "residual": residual, "tolerance": tol})
         self.cash = expected_cash
-        gross = math.fsum(self.quantity[a]*self.prices[day, a] for a in self.assets)
-        after = math.fsum([gross, self.cash, outstanding, -self.debt])
+        if self.ca is None:
+            gross = math.fsum(self.quantity[a]*self.prices[day, a] for a in self.assets)
+            after = math.fsum([gross, self.cash, outstanding, -self.debt])
+        else:
+            gross = math.fsum(self.value_of(day, a) for a in self.assets)
+            after = math.fsum([gross, self.cash, outstanding, -self.debt, self.claims_net()])
         residual, tol = _check(after, equity-cost, max(capital, equity), "rebalance_cost_equity")
         records["diagnostics"].append({"session": day, "code": "rebalance_cost_equity",
                                        "residual": residual, "tolerance": tol})
@@ -786,6 +912,10 @@ class _Ledger:
         for action_id, budget in self.reinvestment_budgets.items():
             row = self.reinvestment_rows[action_id]
             asset = row["asset"]
+            if self.ca is not None and (day, asset) not in self.prices:
+                # Never reinvest into a terminated, suspended or unquoted payer.
+                row.update(session=day, cash_released=budget, status="payer_not_quoted")
+                continue
             if self.quantity[asset] < 0:
                 row.update(session=day, cash_released=budget, status="payer_now_short")
                 continue
@@ -812,8 +942,9 @@ class _Ledger:
             _check(self.cash, 0., max(capital, equity), "reinvestment_cash_roundoff")
             self.cash = 0.
         outstanding = math.fsum(item["outstanding"] for item in self.receivables.values())
-        after = math.fsum([*(self.quantity[a]*self.prices[day, a] for a in self.assets), self.cash, self.collateral, outstanding,
-            -math.fsum(v["outstanding"] for v in self.liabilities.values()), -self.debt])
+        after = (math.fsum([*(self.quantity[a]*self.prices[day, a] for a in self.assets), self.cash, self.collateral, outstanding,
+            -math.fsum(v["outstanding"] for v in self.liabilities.values()), -self.debt]) if self.ca is None
+            else self.current_equity({a: self.value_of(day, a) for a in self.assets}))
         residual, tolerance = _check(after, equity, max(capital, equity), "reinvestment_equity_neutrality")
         records["diagnostics"].append({"session": day, "code": "reinvestment_equity_neutrality",
                                        "residual": residual, "tolerance": tolerance})
@@ -834,7 +965,11 @@ class _Ledger:
             if self.signed:
                 self._accrue_stock_loan(day)
             self._apply_corporate_actions(day)
+            if self.ca is not None:
+                self._apply_lifecycle_actions(day)
             self._settle_payments(day)
+            if self.ca is not None:
+                self._settle_claims(day)
             if day == self.end_session:
                 self.release_reinvestment(day, "terminal_cash")
             elif self.schedule and day in self.schedule:
@@ -879,6 +1014,8 @@ class _Ledger:
         records, stock_borrow, long_short = self.records, self.stock_borrow, self.long_short
         denominator = 360 if stock_borrow.day_count == "ACT/360" else 365
         for asset in self.short_assets:
+            if self.ca is not None and asset in self.ca.terminated and day >= self.ca.terminated[asset]:
+                continue  # An extinguished security is no longer borrowed; obligations are not loans.
             annual, available = self.borrow_plan[day, asset]
             short_value = max(-self.previous_values[asset], 0.)
             amount = short_value*annual/denominator
@@ -905,6 +1042,11 @@ class _Ledger:
     def _apply_corporate_actions(self, day):
         """Apply splits, then accrue ex-date entitlements and short obligations."""
         quantity = self.quantity
+        if self.ca is not None:
+            for action in [*self.split_dates[day], *self.ex_dates[day]]:
+                if any(c["kind"] == "security" and c["asset"] == action["asset"] for c in self.claims.values()):
+                    raise ValueError(f"{action['action_id']} on {day} affects {action['asset']} while a delivery "
+                                     "claim on it is pending; pending claims are not re-denominated")
         for action in self.split_dates[day]:
             asset = action["asset"]
             old = quantity[asset]
@@ -957,14 +1099,25 @@ class _Ledger:
         Returns True when the close breaches margin or equity is nonpositive.
         """
         assets, records, capital = self.assets, self.records, self.capital
+        if self.ca is not None:
+            missing = self._unvalued(day)
+            if missing:
+                return self._stop_unvalued(day, missing)
+            self._recognize_deferred(day)
         # Old holdings earn the interval's price move. Rebalancing at this
         # close affects only future price P&L, with trade costs booked today.
-        before = {a: self.quantity[a]*self.prices[day, a] for a in assets}
+        before = ({a: self.quantity[a]*self.prices[day, a] for a in assets} if self.ca is None
+                  else {a: self.value_of(day, a) for a in assets})
         for asset in assets:
             self.pending_pnl["price_pnl", asset].append(before[asset] - self.previous_values[asset])
+        if self.ca is not None:
+            self._value_claims(day)
+            self._settle_obligations_at_close(day)
         if self.signed:
             self.mark_collateral(day, before)
             self.sweep_cash(day)
+        if self.ca is not None:
+            self._action_trades(day)
         if self.schedule and day in self.schedule:
             before, outstanding, before_equity = self.balances(day, "pre_rebalance")
             self.peak = max(self.peak, before_equity)
@@ -1017,11 +1170,13 @@ class _Ledger:
             "long_exposure": math.fsum(max(v, 0.) for v in values.values()),
             "short_exposure": math.fsum(max(-v, 0.) for v in values.values()),
             "short_liability": math.fsum(max(-v, 0.) for v in values.values()),
-            "margin_required": self.margin_required(values) if self.signed else (self.threshold or 0.)*gross_value,
+            "margin_required": self.margin_required(values) if self.signed else (self.threshold or 0.)*(
+                gross_value if self.ca is None else math.fsum([gross_value, self.claim_totals()[2]])),
             "gross_exposure": gross_value, "net_exposure": math.fsum(values.values()),
             "gross_leverage": gross_value / equity if equity > 0 else None,
             "equity_ratio": equity_ratio, "margin_breached": margin_breached,
             "drawdown": equity / self.peak - 1, "includes_entry_costs": self.previous_session == self.entry_session,
+            **dict(zip(CLAIM_COLUMNS, self.claim_totals() if self.ca is not None else (0., 0., 0., 0.))),
         })
         for (component, asset), amount in sorted(components.items(), key=lambda x: (x[0][0], x[0][1] or "")):
             records["attribution"].append({"session": day, "component": component,
@@ -1034,11 +1189,15 @@ class _Ledger:
         for action_id, item in self.liabilities.items():
             records["dividend_liabilities"].append({"session": day, "action_id": action_id,
                 **{k: item[k] for k in SCHEMAS["dividend_liabilities"] if k not in {"session", "action_id"}}})
+        if self.ca is not None:
+            self.claim_rows(day)
         self.pending_pnl.clear()
         self.previous_values, self.opening_equity, self.previous_session = values, equity, day
         if self.status == "stopped":
             self.event(day, self.stop_reason, phase="close")
             return True
+        if self.ca is not None:
+            self._checkpoint()
         return False
 
     # --------------------------------------------------------------- results
@@ -1110,6 +1269,28 @@ class _Ledger:
                     sample_start=date.fromisoformat(liq["sample_start"]) if liq.get("sample_start") else None,
                     sample_end=date.fromisoformat(liq["sample_end"]),
                     status="executed" if day in self.executed_baskets else "not_executed"))
+        if self.ca is not None:
+            policy = self.ca.policy
+            metadata.update(lifecycle={
+                "strategy_universe": sorted(self.universe), "reachable_assets": self.assets,
+                "corporate_action_policy": asdict(policy) if policy is not None else None,
+                "applied_actions": sorted(self.applied),
+                "valuation": "market_close_else_supplied_mark_else_unvalued_stop",
+                "pending_cash_claim_valuation": "face_value_undiscounted_no_credit_risk_no_interest",
+                "pending_security_claim_valuation": "quantity_times_market_close_or_supplied_mark",
+                "conversion_recognition": "previous_close_marks_else_first_available_mark",
+                "entitlement": "holdings_at_start_of_effective_or_ex_date_before_that_session",
+                "event_order": ["financing_accrual", "stock_borrow_fee_unless_terminated", "splits",
+                    "dividend_ex_dates", "warrant_expiry", "acquisitions_and_distributions",
+                    "dividend_payments", "claim_settlements_and_deliveries", "reinvestment_release_and_sweep",
+                    "close: valuation_check", "close: price_and_claim_marks",
+                    "close: obligation_cash_settlement", "close: collateral_and_sweep",
+                    "close: warrant_exercise_and_liquidation", "close: scheduled_basket_or_reinvestment",
+                    "close: margin_check_and_reporting"],
+                "mandatory_conversion_costs": "none_except_reorganization_fee",
+                "short_obligation_collateral": "collateral_multiple_times_obligation_until_settlement",
+                "unvalued": self.unvalued})
+            metadata["settlement"] = "immediate_trades_dated_corporate_action_settlement"
         if self.signed_kind == "target_notional":
             metadata["target_notional_units"] = market.metadata["currency"]
             metadata["target_notional_sizing"] = "predetermined_currency_amount_divided_by_execution_raw_close_no_scaling"

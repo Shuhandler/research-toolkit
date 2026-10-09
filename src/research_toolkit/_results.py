@@ -22,6 +22,14 @@ class MarketData:
     metadata: dict[str, Any]
     diagnostics: pl.DataFrame
     snapshot_id: str
+    # Optional lifecycle inputs; all None for markets prepared without them.
+    securities: pl.DataFrame | None = None
+    suspensions: pl.DataFrame | None = None
+    aliases: pl.DataFrame | None = None
+    corporate_actions: pl.DataFrame | None = None
+    action_legs: pl.DataFrame | None = None
+    warrants: pl.DataFrame | None = None
+    valuation_marks: pl.DataFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +75,9 @@ class BacktestResult:
     stop_reason: str | None = None
     stop_session: date | None = None
     stop_time: datetime | None = None
+    # Corporate-action audit and end-of-session pending claims (typed empty without actions).
+    corporate_actions: pl.DataFrame | None = None
+    security_claims: pl.DataFrame | None = None
 
     def require_complete(self) -> "BacktestResult":
         """Return this result or reject a stopped run as a full-period result."""
