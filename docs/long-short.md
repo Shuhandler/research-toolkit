@@ -218,6 +218,9 @@ breach. Pre-trade breaches cannot be concealed by scheduled covers or reinvestme
 Checks follow that date's obligations/collateral funding and run again after trades.
 This is an explicit research assumption, not a broker, regulatory, or intraday rule.
 No forced liquidation, borrow recall, or additional events occur after a stop.
+`enforce_maintenance_margin=False` keeps reporting the requirement and
+`margin_shortfall` but lets the run continue through a breach; nonpositive equity
+still stops it. See [the API](api.md#disabling-maintenance-margin-enforcement-research-option).
 
 Returns continue to divide P&L by portfolio equity: original capital for the first
 interval (including entry costs), then previous closing equity. The failing close
@@ -230,7 +233,8 @@ remain mandatory for their respective uses.
 Existing records retain their meaning and gain these fields:
 
 - `daily`: `long_exposure`, `short_exposure` (absolute), `short_liability`,
-  `restricted_collateral`, `dividend_liability`, and `margin_required`.
+  `restricted_collateral`, `dividend_liability`, `margin_required` and
+  `margin_shortfall`.
   `gross_exposure` is absolute; `net_exposure` is signed. `equity_ratio` still
   describes equity/gross exposure but does not replace the side-specific margin rule.
 - `valuations`: `restricted_collateral`, `short_liability`, `dividend_liability`.

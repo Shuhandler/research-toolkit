@@ -52,7 +52,7 @@ SCHEMAS = {
               "debt": F, "dividend_receivable": F, "dividend_liability": F, "restricted_collateral": F,
               "long_exposure": F, "short_exposure": F, "short_liability": F, "margin_required": F, "gross_exposure": F,
               "net_exposure": F, "gross_leverage": F, "drawdown": F,
-              "equity_ratio": F, "margin_breached": pl.Boolean,
+              "equity_ratio": F, "margin_breached": pl.Boolean, "margin_shortfall": F,
               "includes_entry_costs": pl.Boolean, **{c: F for c in CLAIM_COLUMNS}},
     "positions": {"session": D, "asset": S, "quantity": F, "raw_mark": F,
                   "market_value": F, "weight": F},
@@ -110,7 +110,8 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
                  financing: Financing | SOFRFinancing | None = None,
                  dividend_reinvestment: DividendReinvestment | None = None,
                  corporate_actions: CorporateActionPolicy | None = None,
-                 warrant_exercises: pl.DataFrame | None = None) -> BacktestResult:
+                 warrant_exercises: pl.DataFrame | None = None,
+                 enforce_maintenance_margin: bool = True) -> BacktestResult:
     """Run a fractional-share, raw-close buy-and-hold portfolio with explicit funding.
 
     Supply ``financing`` for leveraged runs. The existing explicit ``cash_rate``
@@ -118,6 +119,10 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
     the two configurations. Rates capitalize daily, including nontrading dates.
     Breached margin or nonpositive equity stops at the failure close, preserving
     balances and setting incomplete status. No liquidation or rebalancing occurs.
+    ``enforce_maintenance_margin=False`` is a research assumption, not a broker
+    rule: maintenance requirements and shortfalls are still reported each close,
+    but a breach neither rejects entry nor stops the run. Nonpositive equity
+    still stops it.
     Optional ``dividend_reinvestment`` purchases the paying asset after payment;
     without it, quantities change only for splits.
     Entry costs reduce the first holding interval's P&L, whose denominator is
@@ -143,7 +148,8 @@ def buy_and_hold(market, *, weights=None, equity_exposures=None, quantities=None
         cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing,
         dividend_reinvestment=dividend_reinvestment, equity_exposures=equity_exposures,
         quantities=quantities, long_short=long_short, stock_borrow=stock_borrow,
-        corporate_actions=corporate_actions, warrant_exercises=warrant_exercises)
+        corporate_actions=corporate_actions, warrant_exercises=warrant_exercises,
+        enforce_maintenance_margin=enforce_maintenance_margin)
 
 
 def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_session,
@@ -153,7 +159,8 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
                         dividend_reinvestment: DividendReinvestment | None = None,
                         long_short: LongShortPolicy | None = None, stock_borrow: StockBorrow | None = None,
                         corporate_actions: CorporateActionPolicy | None = None,
-                        warrant_exercises: pl.DataFrame | None = None):
+                        warrant_exercises: pl.DataFrame | None = None,
+                        enforce_maintenance_margin: bool = True):
     """Execute dated long-only or explicitly signed targets through the shared ledger.
 
     Signed targets require long_short and stock_borrow and use equity_exposure,
@@ -167,7 +174,10 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     Corporate actions use the same ``corporate_actions``/``warrant_exercises``
     contract as ``buy_and_hold``; a nonzero target for a security that is not
     quoted at its execution session is rejected as stale.
+    ``enforce_maintenance_margin`` has the same meaning as in ``buy_and_hold``;
+    when False, a breach also does not block the scheduled basket.
     """
+    _check_enforcement(enforce_maintenance_margin)
     if not isinstance(policy, RebalancePolicy) or not isinstance(financing, (Financing, SOFRFinancing)):
         raise ValueError("scheduled_rebalance requires RebalancePolicy and Financing or SOFRFinancing")
     policy.__post_init__()
@@ -184,6 +194,7 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
             financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
             dividend_reinvestment=dividend_reinvestment, long_short=long_short, stock_borrow=stock_borrow,
             corporate_actions=corporate_actions, warrant_exercises=warrant_exercises,
+            enforce_maintenance_margin=enforce_maintenance_margin,
             equity_exposures=first if kind == "equity_exposure" else None,
             quantities=first if kind == "quantity" else None,
             target_notionals=first if kind == "target_notional" else None)
@@ -195,7 +206,7 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
     for _, leverage, _ in plans.values():
         if leverage > 1 and financing.maintenance_equity_ratio is None:
             raise ValueError("any leveraged target requires maintenance_equity_ratio")
-        if leverage and _below_margin(1/leverage, financing.maintenance_equity_ratio):
+        if enforce_maintenance_margin and leverage and _below_margin(1/leverage, financing.maintenance_equity_ratio):
             raise ValueError("target leverage violates maintenance_equity_ratio")
     initial_policy = BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
         fractional_shares=True, initial_gross_leverage=first_leverage, terminal_action="mark_only")
@@ -203,17 +214,23 @@ def scheduled_rebalance(market, *, targets, initial_capital, entry_session, end_
         entry_session=entry_session, end_session=end_session, policy=initial_policy, costs=costs,
         financing=financing, schedule=plans, target_table=table, rebalance_policy=policy,
         dividend_reinvestment=dividend_reinvestment, corporate_actions=corporate_actions,
-        warrant_exercises=warrant_exercises)
+        warrant_exercises=warrant_exercises, enforce_maintenance_margin=enforce_maintenance_margin)
 
     return _attach_signals(result, signals) if signals else result
+
+
+def _check_enforcement(value):
+    if type(value) is not bool:
+        raise ValueError("enforce_maintenance_margin must be True or False")
 
 
 def _simulate(market, *, weights, initial_capital, entry_session, end_session, policy,
               costs, cash_rate=None, cash_day_count=None, financing=None,
               schedule=None, target_table=None, rebalance_policy=None, dividend_reinvestment=None,
               equity_exposures=None, quantities=None, long_short=None, stock_borrow=None, target_notionals=None,
-              corporate_actions=None, warrant_exercises=None):
+              corporate_actions=None, warrant_exercises=None, enforce_maintenance_margin=True):
     """Validate one run, book its entry, process every calendar date, and return the records."""
+    _check_enforcement(enforce_maintenance_margin)
     ledger = _Ledger(market, weights=weights, initial_capital=initial_capital,
         entry_session=entry_session, end_session=end_session, policy=policy, costs=costs,
         cash_rate=cash_rate, cash_day_count=cash_day_count, financing=financing,
@@ -221,7 +238,7 @@ def _simulate(market, *, weights, initial_capital, entry_session, end_session, p
         dividend_reinvestment=dividend_reinvestment, equity_exposures=equity_exposures,
         quantities=quantities, long_short=long_short, stock_borrow=stock_borrow,
         target_notionals=target_notionals, corporate_actions=corporate_actions,
-        warrant_exercises=warrant_exercises)
+        warrant_exercises=warrant_exercises, enforce_maintenance_margin=enforce_maintenance_margin)
     ledger.enter()
     ledger.run()
     return ledger.result()
@@ -239,8 +256,12 @@ class _Ledger(_ActionLedger):
     def __init__(self, market, *, weights, initial_capital, entry_session, end_session, policy,
                  costs, cash_rate, cash_day_count, financing, schedule, target_table,
                  rebalance_policy, dividend_reinvestment, equity_exposures, quantities,
-                 long_short, stock_borrow, target_notionals, corporate_actions=None, warrant_exercises=None):
+                 long_short, stock_borrow, target_notionals, corporate_actions=None, warrant_exercises=None,
+                 enforce_maintenance_margin=True):
         self.market = _validated_market(market)
+        # Research opt-out: requirements are still computed and reported; only
+        # the breach consequences (entry rejection, skipped trades, stop) change.
+        self.enforce_margin = enforce_maintenance_margin
         self.action_policy, self.exercise_input = corporate_actions, warrant_exercises
         self.policy, self.costs, self.financing = policy, costs, financing
         self.entry_session, self.end_session = entry_session, end_session
@@ -316,7 +337,7 @@ class _Ledger(_ActionLedger):
             self.borrowing_rate, self.threshold = 0.0, None
         if exposure > 1 and self.threshold is None:
             raise ValueError("borrowing requires maintenance_equity_ratio")
-        if exposure and _below_margin(1 / exposure, self.threshold):
+        if self.enforce_margin and exposure and _below_margin(1 / exposure, self.threshold):
             raise ValueError("initial leverage violates maintenance_equity_ratio")
         entry_session, end_session = self.entry_session, self.end_session
         if type(entry_session) is not date or type(end_session) is not date:
@@ -575,6 +596,10 @@ class _Ledger(_ActionLedger):
             gross_value = math.fsum([gross_value, self.claim_totals()[2]])
         return _below_margin(equity/gross_value if gross_value else None, self.threshold)
 
+    def blocks_trade(self, values, equity):
+        """True when an enforced maintenance breach must stop discretionary trading."""
+        return self.enforce_margin and self.breached(values, equity)
+
     def position_rows(self, day, values, equity):
         for asset in self.assets:
             self.records["positions"].append({"session": day, "asset": asset,
@@ -615,7 +640,7 @@ class _Ledger(_ActionLedger):
         gross_value = math.fsum(abs(new_values[a]) for a in assets)
         if self.rebalance_policy and gross_value and any(abs(new_values[a])/gross_value > self.rebalance_policy.max_asset_weight+1e-12 for a in assets):
             raise ValueError("signed target exceeds max_asset_weight as a share of gross exposure")
-        if phase == "entry_close" and self.breached(new_values, after):
+        if phase == "entry_close" and self.enforce_margin and self.breached(new_values, after):
             raise ValueError("signed entry violates long/short margin requirements")
         # Release collateral only within this atomic basket, then segregate the new
         # marked requirement before any debt sweep. Sale proceeds never enter a sweep.
@@ -701,7 +726,7 @@ class _Ledger(_ActionLedger):
             self._enter_long_basket()
         values, _, post_entry_equity = self.balances(entry_session, "post_entry")
         _check(post_entry_equity, capital - self.entry_cost, capital, "entry_cost_equity")
-        if self.breached(values, post_entry_equity):
+        if self.enforce_margin and self.breached(values, post_entry_equity):
             raise ValueError("funded entry violates maintenance_equity_ratio")
         self.position_rows(entry_session, values, post_entry_equity)
         if not self.signed:
@@ -1096,7 +1121,7 @@ class _Ledger(_ActionLedger):
     def _close_session(self, day):
         """Mark, trade any scheduled or reinvestment basket, close and record the session.
 
-        Returns True when the close breaches margin or equity is nonpositive.
+        Returns True when the run stops: nonpositive equity, or an enforced margin breach.
         """
         assets, records, capital = self.assets, self.records, self.capital
         if self.ca is not None:
@@ -1122,12 +1147,12 @@ class _Ledger(_ActionLedger):
             before, outstanding, before_equity = self.balances(day, "pre_rebalance")
             self.peak = max(self.peak, before_equity)
             # A pre-trade failure cannot be hidden by a scheduled deleveraging.
-            if before_equity > 0 and not self.breached(before, before_equity):
+            if before_equity > 0 and not self.blocks_trade(before, before_equity):
                 self.rebalance(day, before, outstanding, before_equity)
         elif self.reinvestment_budgets:
             before, outstanding, before_equity = self.balances(day, "pre_reinvestment")
             self.peak = max(self.peak, before_equity)
-            if before_equity > 0 and not self.breached(before, before_equity):
+            if before_equity > 0 and not self.blocks_trade(before, before_equity):
                 self.reinvest(day, before_equity)
             else:
                 self.release_reinvestment(day, "stopped_before_trade")
@@ -1147,7 +1172,9 @@ class _Ledger(_ActionLedger):
         gross_value = math.fsum(abs(v) for v in values.values())
         equity_ratio = equity / gross_value if gross_value else None
         margin_breached = self.breached(values, equity)
-        if equity <= 0 or margin_breached:
+        margin_required = self.margin_required(values) if self.signed else (self.threshold or 0.)*(
+            gross_value if self.ca is None else math.fsum([gross_value, self.claim_totals()[2]]))
+        if equity <= 0 or (margin_breached and self.enforce_margin):
             self.status = "stopped"
             self.stop_reason = "nonpositive_equity" if equity <= 0 else "maintenance_margin_breach"
             self.stop_session, self.stop_time = day, self.closes[day]
@@ -1170,11 +1197,11 @@ class _Ledger(_ActionLedger):
             "long_exposure": math.fsum(max(v, 0.) for v in values.values()),
             "short_exposure": math.fsum(max(-v, 0.) for v in values.values()),
             "short_liability": math.fsum(max(-v, 0.) for v in values.values()),
-            "margin_required": self.margin_required(values) if self.signed else (self.threshold or 0.)*(
-                gross_value if self.ca is None else math.fsum([gross_value, self.claim_totals()[2]])),
+            "margin_required": margin_required,
             "gross_exposure": gross_value, "net_exposure": math.fsum(values.values()),
             "gross_leverage": gross_value / equity if equity > 0 else None,
             "equity_ratio": equity_ratio, "margin_breached": margin_breached,
+            "margin_shortfall": margin_required-equity if margin_breached else 0.,
             "drawdown": equity / self.peak - 1, "includes_entry_costs": self.previous_session == self.entry_session,
             **dict(zip(CLAIM_COLUMNS, self.claim_totals() if self.ca is not None else (0., 0., 0., 0.))),
         })
@@ -1219,6 +1246,8 @@ class _Ledger(_ActionLedger):
             "financing": self.financing_metadata,
             "borrowing_rate": self.borrowing_rate, "maintenance_equity_ratio": self.threshold,
             "margin_monitoring": "session_close", "margin_comparison_relative_tolerance": 1e-12,
+            "maintenance_margin_enforced": self.enforce_margin,
+            "maintenance_margin_breach_action": "stop" if self.enforce_margin else "report_only",
             "return_denominator": "first_interval_pre_entry_capital_then_prior_closing_equity",
             "dividend_policy": "ex_date_receivable_pay_date_cash_no_reinvestment",
             "cash_sweep": financing.cash_sweep if financing else "hold_cash_no_debt",

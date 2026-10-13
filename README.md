@@ -54,6 +54,11 @@ dividend payment dates where applicable. It does not assume that a provider's
 | `rt.risk_contributions(...)` | Estimates each asset's contribution to portfolio volatility. |
 | `result.require_complete()` | Raises an error if a backtest stopped before its requested end. |
 
+Both simulators accept `enforce_maintenance_margin=False` for research runs that
+should keep going through a margin breach. Requirements and shortfalls are still
+reported, and nonpositive equity still stops the run. See
+[the API](docs/api.md#disabling-maintenance-margin-enforcement-research-option).
+
 Buy-and-hold lets weights drift without trading. Splits and explicitly enabled
 dividend reinvestment can change quantities. Neither simulator automatically sells
 the portfolio at the end. With corporate actions, pass `corporate_actions=

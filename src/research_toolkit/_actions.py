@@ -462,7 +462,7 @@ class _ActionLedger:
             return
         values = {a: self.value_of(day, a) for a in self.assets}
         equity = self.current_equity(values)
-        if equity <= 0 or self.breached(values, equity):
+        if equity <= 0 or self.blocks_trade(values, equity):
             return  # The session-close check stops the run; no discretionary trade conceals it.
         for row in exercises:
             self._exercise(day, row)

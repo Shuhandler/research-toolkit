@@ -248,6 +248,50 @@ The final P&L and simple return can represent losses at or beyond −100%; they 
 not clipped. For nonpositive equity, log return, gross leverage, and position
 equity weights are null. The signed compounded return still reconciles to ending
 equity/initial capital minus one. Completed results have null stop fields.
+
+### Disabling maintenance-margin enforcement (research option)
+
+`buy_and_hold` and `scheduled_rebalance` both accept
+`enforce_maintenance_margin: bool = True`. The default keeps every rule above.
+Passing `False` is a research assumption that the account may stay below its
+maintenance requirement; it is not a claim that any broker would allow it.
+
+With enforcement disabled:
+
+- The requirement is still computed and reported at every close: `daily` keeps
+  `margin_required` and `margin_breached`, and `margin_shortfall` gives
+  `margin_required - equity` on breached closes (0 otherwise).
+- A breach does not reject entry (initial leverage, signed entry or funded entry
+  checks, and `scheduled_rebalance`'s target-leverage check), does not block a
+  scheduled basket, dividend reinvestment or corporate-action trade, and does not
+  stop the run. Corporate-action claim, obligation and warrant margins are treated
+  the same way.
+- Nonpositive equity still stops the run with `stop_reason="nonpositive_equity"`.
+  All other validation is unchanged, including the requirement to declare a
+  `maintenance_equity_ratio` (or `LongShortPolicy` margins) whenever the run borrows.
+- Collateral, financing, cash interest, borrow fees, rebates, dividends, corporate
+  actions and transaction costs are unchanged; nothing is liquidated.
+- `metadata["maintenance_margin_enforced"]` records the choice and
+  `metadata["maintenance_margin_breach_action"]` is `"stop"` or `"report_only"`.
+  A scheduled pre-trade breach remains visible in the `pre_rebalance` valuation.
+
+Results up to and including the first breached close are identical to the enforced
+run; only the stop fields and these two metadata keys differ.
+
+```python
+financing = rt.Financing(cash_rate=0.0, borrowing_rate=0.05, day_count="ACT/365F",
+                         maintenance_equity_ratio=0.4, on_breach="stop", cash_sweep="repay_debt")
+result = rt.buy_and_hold(market, weights={"A": 1.0}, initial_capital=100.0,
+    entry_session=start, end_session=end, financing=financing,
+    policy=rt.BuyHoldPolicy(execution="entry_close", sizing="post_cost_equity",
+        fractional_shares=True, initial_gross_leverage=2.0, terminal_action="mark_only"),
+    costs=rt.TradeCosts(commission_bps=0.0, half_spread_bps=0.0, impact_bps=0.0),
+    enforce_maintenance_margin=False)
+breaches = result.daily.filter(pl.col("margin_breached")).select("session", "equity", "margin_required", "margin_shortfall")
+```
+
+`Financing.on_breach` must still be `"stop"`; the run-level argument overrides
+only whether a breach has consequences.
 `require_complete()` returns the result when complete and raises `ValueError`
 otherwise. Call it before full-period comparisons. Partial analysis must explicitly
 show actual coverage and the stop reason. Full performance reports are implemented below.
@@ -296,7 +340,7 @@ The implementation follows [financial conventions](financial-conventions.md):
 
 | Table | Main fields / meaning |
 | --- | --- |
-| `daily` | Session/period start, opening and ending equity, dollar P&L, simple/log returns, cumulative P&L and simple-return sum, compounded return, cash, debt, receivables, exposure, leverage, equity ratio, margin-breach flag, closing drawdown, entry-cost flag |
+| `daily` | Session/period start, opening and ending equity, dollar P&L, simple/log returns, cumulative P&L and simple-return sum, compounded return, cash, debt, receivables, exposure, leverage, equity ratio, margin-breach flag, margin shortfall, closing drawdown, entry-cost flag |
 | `positions` | Session/asset, quantity, raw mark, value, net-equity weight; includes entry session |
 | `trades` | Trade ID, session/UTC close, asset, signed quantity/notional, reference price, execution policy, cost |
 | `costs` | Cost ID, date/time, nullable trade ID/asset, component, amount, modeled basis; nonzero trade costs and calendar-date borrowing interest |

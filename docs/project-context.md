@@ -62,6 +62,9 @@ These are explicit, revisable design choices, not additional user confirmations:
 - Fixed nominal financing rates with actual elapsed days/365, or optional
   historical SOFR-plus-spread borrowing with explicit availability/day count; configurable
   research margin threshold with stop-on-breach. This is not a broker margin model.
+  User-confirmed (2026-10-13): research backtests may pass
+  `enforce_maintenance_margin=False` to report breaches without rejecting entry
+  or stopping; enforcement stays the default and nonpositive equity always stops.
 - Strict date alignment by default. Explicit supplied session calendars and source
   metadata. Matplotlib figures initially; interactive plots are a later option.
 - Synthetic fixtures first; local snapshots plus manifests for real-data examples.
